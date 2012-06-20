@@ -1,0 +1,15 @@
+# HG changeset patch
+# Parent 9f25586471175188d6ef8026cfe5a635a6f071cf
+# User Thaddee Tyl <thaddee.tyl@gmail.com>
+
+diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
+--- a/browser/devtools/webconsole/HUDService.jsm
++++ b/browser/devtools/webconsole/HUDService.jsm
+@@ -1799,6 +1799,7 @@
+     // Remove the HUDBox and the consolePanel if the Web Console is inside a
+     // floating panel.
+     if (hud.consolePanel && hud.consolePanel.parentNode) {
++      hud.consolePanel.hidePopup();
+       hud.consolePanel.parentNode.removeChild(hud.consolePanel);
+       hud.consolePanel.removeAttribute("hudId");
+       hud.consolePanel = null;

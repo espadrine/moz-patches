@@ -1,0 +1,160 @@
+# HG changeset patch
+# Parent 254a734ccaf3e0c01079efed49936462b081f5e9
+# User Thaddee Tyl <thaddee.tyl@gmail.com>
+
+diff --git a/browser/devtools/highlighter/InsideOutBox.jsm b/browser/devtools/highlighter/InsideOutBox.jsm
+--- a/browser/devtools/highlighter/InsideOutBox.jsm
++++ b/browser/devtools/highlighter/InsideOutBox.jsm
+@@ -128,6 +128,9 @@
+ 
+ var EXPORTED_SYMBOLS = ["InsideOutBox"];
+ 
++const Cu = Components.utils;
++Cu.import("resource:///modules/devtools/LayoutHelpers.jsm");
++
+ function InsideOutBox(aView, aBox)
+ {
+   this.view = aView;
+@@ -138,7 +141,6 @@
+   this.rootObjectBox = null;
+   this.selectedObjectBox = null;
+   this.highlightedObjectBox = null;
+-  this.scrollIntoView = false;
+ };
+ 
+ InsideOutBox.prototype =
+@@ -212,7 +214,18 @@
+     if (makeBoxVisible) {
+       this.openObjectBox(objectBox);
+       if (scrollIntoView) {
++        dump('--- Scrolling ---\n');
+         objectBox.scrollIntoView(true);
++        let window = objectBox.ownerDocument.defaultView;
++        window.scrollBy(0, -window.innerHeight / 2);
++        //window.scroll(0, objectBox.offsetTop + window.innerHeight -
++            //objectBox.offsetHeight);
++        dump('--- Scroll: innerHeight is ' + window.innerHeight + '\n');
++        dump('position: (' + scrollX + ', ' + scrollY + ')\n');
++        dump('position: (' + scrollX + ', ' + scrollY + ')\n');
++        LayoutHelpers.scrollIntoViewIfNeeded(
++            objectBox.ownerDocument.defaultView,
++            objectBox);
+       }
+     }
+     return objectBox;
+@@ -658,6 +671,5 @@
+     delete this.rootObjectBox;
+     delete this.selectedObjectBox;
+     delete this.highlightedObjectBox;
+-    delete this.scrollIntoView;
+   }
+ };
+diff --git a/browser/devtools/shared/LayoutHelpers.jsm b/browser/devtools/shared/LayoutHelpers.jsm
+--- a/browser/devtools/shared/LayoutHelpers.jsm
++++ b/browser/devtools/shared/LayoutHelpers.jsm
+@@ -186,8 +186,7 @@
+    * @param integer aY
+    * @returns Node|null the element node found at the given coordinates.
+    */
+-  getElementFromPoint: function LH_elementFromPoint(aDocument, aX, aY)
+-  {
++  getElementFromPoint: function LH_elementFromPoint(aDocument, aX, aY) {
+     let node = aDocument.elementFromPoint(aX, aY);
+     if (node && node.contentDocument) {
+       if (node instanceof Ci.nsIDOMHTMLIFrameElement) {
+@@ -214,4 +213,95 @@
+     }
+     return node;
+   },
++
++
++  /**
++   * Scroll the document so that the element `elem` appears in the viewport.
++   *
++   * @param Element elem the element that needs to appear in the viewport.
++   * @param bool centered true if you want it centered , false if you want it
++   * to appear on the top of the viewport. It is true by default, and that is
++   * usually what you want.
++   */
++  scrollIntoViewIfNeeded:
++  function LH_scrollIntoViewIfNeeded(win, elem, centered) {
++    centered = centered === undefined? true: !!centered;
++
++    // The following are always from the {top, bottom, left, right}
++    // of the viewport, to the {top, …} of the box.
++    // Think of them as geometrical vectors, it helps.
++    // The axes are directed downwards and towards the right.
++
++    dump("--- scroll: offsetTop: " + elem.offsetTop + "---\n");
++    dump("--- scroll: offsetHeight: " + elem.offsetHeight + "---\n");
++    dump("--- scroll: scrollY: " + win.scrollY + "---\n");
++
++    var topToBottom = elem.offsetTop + elem.offsetHeight - win.scrollY,
++        bottomToTop = - win.innerHeight + topToBottom - elem.offsetHeight,
++        leftToRight = elem.offsetLeft + elem.offsetWidth,
++        rightToLeft = - win.innerWidth + leftToRight - elem.offsetWidth,
++        xAllowed = true,  // We allow one translation on the x axis,
++        yAllowed = true;  // and one on the y axis.
++
++    dump("--- scroll: topToBottom: " + topToBottom + "---\n");
++    dump("--- scroll: bottomToTop: " + bottomToTop + "---\n");
++    dump("--- scroll: leftToRight: " + leftToRight + "---\n");
++    dump("--- scroll: rightToLeft: " + rightToLeft + "---\n");
++
++    // Whatever `centered` is, the behavior is the same if the box is
++    // (even partially) visible.
++
++    if ((topToBottom > 0 || !centered) && topToBottom <= elem.offsetHeight) {
++      if (yAllowed) {
++        dump("Scroll top to bottom by " +
++            topToBottom - elem.offsetHeight + "\n");
++        win.scrollBy(0, topToBottom - elem.offsetHeight);
++        yAllowed = false;
++      }
++    } else
++    if ((bottomToTop < 0 || !centered) && bottomToTop >= -elem.offsetHeight) {
++      if (yAllowed) {
++        dump("Scroll bottom to top\n");
++        win.scrollBy(0, bottomToTop + elem.offsetHeight);
++        yAllowed = false;
++      }
++    }
++
++    if ((leftToRight > 0 || !centered) && leftToRight <= elem.offsetWidth) {
++      if (xAllowed) {
++        dump("Scroll left to right\n");
++        win.scrollBy(leftToRight - elem.offsetWidth, 0);
++        xAllowed = false;
++      }
++    } else
++    if ((rightToLeft < 0 || !centered) && rightToLeft >= -elem.offsetWidth) {
++      if (xAllowed) {
++        dump("Scroll right to left\n");
++        win.scrollBy(rightToLeft + elem.offsetWidth, 0);
++        xAllowed = false;
++      }
++    }
++
++    // If we want it centered, and the box is completely hidden,
++    // then we center it explicitly.
++
++    if (centered) {
++
++      if (yAllowed && (topToBottom <= 0 || bottomToTop >= 0)) {
++        dump("Scroll top / bottom: (" + win.scrollX + ", " +
++             (elem.offsetTop + elem.offsetHeight / 2
++             - win.innerHeight / 2) + ")\n";
++        win.scroll(win.scrollX,
++                      elem.offsetTop + elem.offsetHeight / 2
++                      - win.innerHeight / 2);
++      }
++
++      if (xAllowed && (leftToRight <= 0 || rightToLeft <= 0)) {
++        dump("Scroll left to right\n");
++        win.scroll(elem.offsetLeft + elem.offsetWidth / 2
++                      - win.innerWidth / 2,
++                      win.scrollY);
++      }
++    }
++  },
+ };

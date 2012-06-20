@@ -1,0 +1,45 @@
+# HG changeset patch
+# Parent cb28e8f59b9453ebafa59add5d685a2bce53d53f
+# User Thaddee Tyl <thaddee.tyl@gmail.com>
+
+diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
+--- a/browser/devtools/sourceeditor/source-editor-orion.jsm
++++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
+@@ -131,6 +131,15 @@ const DEFAULT_KEYBINDINGS = [
+   },
+ ];
+ 
++if (Services.appinfo.OS == "WINNT" ||
++    Services.appinfo.OS == "Linux") {
++  DEFAULT_KEYBINDINGS.push({
++    action: "redo",
++    code: Ci.nsIDOMKeyEvent.DOM_VK_Y,
++    accel: true,
++  });
++}
++
+ var EXPORTED_SYMBOLS = ["SourceEditor"];
+ 
+ /**
+diff --git a/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js b/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js
+--- a/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js
++++ b/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js
+@@ -98,6 +98,18 @@ function editorLoaded()
+ 
+   is(editor.getText(), "code-editor", "Ctrl-Shift-Z (redo) works");
+ 
++  editor.undo();
++
++  EventUtils.synthesizeKey("VK_Y", {accelKey: true}, testWin);
++  if (Services.appinfo.OS == "WINNT" ||
++      Services.appinfo.OS == "Linux") {
++    is(editor.getText(), "code-editor",
++       "CTRL+Y does redo on Linux and Windows");
++  } else {
++    is(editor.getText(), "source-editor",
++       "CTRL+Y doesn't redo on machines other than Linux and Windows");
++  }
++
+   // Test selection methods.
+ 
+   editor.setSelection(0, 4);

@@ -1,0 +1,303 @@
+# HG changeset patch
+# Parent 254a734ccaf3e0c01079efed49936462b081f5e9
+# User Thaddee Tyl <thaddee.tyl@gmail.com>
+
+diff --git a/browser/devtools/highlighter/InsideOutBox.jsm b/browser/devtools/highlighter/InsideOutBox.jsm
+--- a/browser/devtools/highlighter/InsideOutBox.jsm
++++ b/browser/devtools/highlighter/InsideOutBox.jsm
+@@ -128,6 +128,9 @@
+ 
+ var EXPORTED_SYMBOLS = ["InsideOutBox"];
+ 
++const Cu = Components.utils;
++Cu.import("resource:///modules/devtools/LayoutHelpers.jsm");
++
+ function InsideOutBox(aView, aBox)
+ {
+   this.view = aView;
+@@ -212,7 +215,9 @@
+     if (makeBoxVisible) {
+       this.openObjectBox(objectBox);
+       if (scrollIntoView) {
+-        objectBox.scrollIntoView(true);
++        // We want to center the label of the element, not the whole tag
++        // (which includes all of its children, and is vertically huge).
++        LayoutHelpers.scrollIntoViewIfNeeded(objectBox.firstElementChild);
+       }
+     }
+     return objectBox;
+diff --git a/browser/devtools/shared/LayoutHelpers.jsm b/browser/devtools/shared/LayoutHelpers.jsm
+--- a/browser/devtools/shared/LayoutHelpers.jsm
++++ b/browser/devtools/shared/LayoutHelpers.jsm
+@@ -186,8 +186,7 @@
+    * @param integer aY
+    * @returns Node|null the element node found at the given coordinates.
+    */
+-  getElementFromPoint: function LH_elementFromPoint(aDocument, aX, aY)
+-  {
++  getElementFromPoint: function LH_elementFromPoint(aDocument, aX, aY) {
+     let node = aDocument.elementFromPoint(aX, aY);
+     if (node && node.contentDocument) {
+       if (node instanceof Ci.nsIDOMHTMLIFrameElement) {
+@@ -214,4 +213,84 @@
+     }
+     return node;
+   },
++
++  /**
++   * Scroll the document so that the elemen "elem" appears in the viewport.
++   *
++   * @param Element elem the element that needs to appear in the viewport.
++   * @param bool centered true if you want it centered, false if you want it to
++   * appear on the top of the viewport. It is true by default, and that is
++   * usually what you want.
++   */
++  scrollIntoViewIfNeeded:
++  function LH_scrollIntoViewIfNeeded(elem, centered) {
++    centered = centered === undefined? true: !!centered;
++
++    let win = elem.ownerDocument.defaultView;
++    let clientRect = elem.getBoundingClientRect();
++
++    // The following are always from the {top, bottom, left, right}
++    // of the viewport, to the {top, …} of the box.
++    // Think of them as geometrical vectors, it helps.
++    // The axes are directed downwards and towards the right.
++
++    let topToBottom = clientRect.bottom;
++    let bottomToTop = clientRect.top - win.innerHeight;
++    let leftToRight = clientRect.right;
++    let rightToLeft = clientRect.left - win.innerWidth;
++    let xAllowed = true;  // We allow one translation on the x axis,
++    let yAllowed = true;  // and one on the y axis.
++
++    // Whatever `centered` is, the behavior is the same if the box is
++    // (even partially) visible.
++
++    if ((topToBottom > 0 || !centered) && topToBottom <= elem.offsetHeight) {
++      if (yAllowed) {
++        win.scrollBy(0, topToBottom - elem.offsetHeight);
++        yAllowed = false;
++      }
++    } else
++    if ((bottomToTop < 0 || !centered) && bottomToTop >= -elem.offsetHeight) {
++      if (yAllowed) {
++        win.scrollBy(0, bottomToTop + elem.offsetHeight);
++        yAllowed = false;
++      }
++    }
++
++    if ((leftToRight > 0 || !centered) && leftToRight <= elem.offsetWidth) {
++      if (xAllowed) {
++        win.scrollBy(leftToRight - elem.offsetWidth, 0);
++        xAllowed = false;
++      }
++    } else
++    if ((rightToLeft < 0 || !centered) && rightToLeft >= -elem.offsetWidth) {
++      if (xAllowed) {
++        win.scrollBy(rightToLeft + elem.offsetWidth, 0);
++        xAllowed = false;
++      }
++    }
++
++    // If we want it centered, and the box is completely hidden,
++    // then we center it explicitly.
++
++    if (centered) {
++
++      if (yAllowed && (topToBottom <= 0 || bottomToTop >= 0)) {
++        win.scroll(win.scrollX,
++                   win.scrollY + clientRect.top
++                   - (win.innerHeight - elem.offsetHeight) / 2);
++      }
++
++      if (xAllowed && (leftToRight <= 0 || rightToLeft <= 0)) {
++        win.scroll(win.scrollX + clientRect.left
++                   - (win.innerWidth - elem.offsetWidth) / 2,
++                   win.scrollY);
++      }
++    }
++
++    if (win.parent !== win) {
++      // We are inside an iframe.
++      LH_scrollIntoViewIfNeeded(win.frameElement, centered);
++    }
++  },
+ };
+diff --git a/browser/devtools/shared/test/Makefile.in b/browser/devtools/shared/test/Makefile.in
+--- a/browser/devtools/shared/test/Makefile.in
++++ b/browser/devtools/shared/test/Makefile.in
+@@ -19,12 +19,15 @@
+   browser_templater_basic.js \
+   browser_toolbar_basic.js \
+   browser_toolbar_tooltip.js \
++  browser_layoutHelpers.js \
+   head.js \
+   $(NULL)
+ 
+ _BROWSER_TEST_PAGES = \
+   browser_templater_basic.html \
+   browser_toolbar_basic.html \
++  browser_layoutHelpers.html \
++  browser_layoutHelpers_iframe.html \
+   $(NULL)
+ 
+ libs:: $(_BROWSER_TEST_FILES)
+diff --git a/browser/devtools/shared/test/browser_layoutHelpers.html b/browser/devtools/shared/test/browser_layoutHelpers.html
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/shared/test/browser_layoutHelpers.html
+@@ -0,0 +1,25 @@
++<!doctype html>
++<meta charset=utf-8>
++<title> Layout Helpers </title>
++
++<style>
++  html {
++    height: 300%;
++    width: 300%;
++  }
++  div#some {
++    position: absolute;
++    background: black;
++    width: 2px;
++    height: 2px;
++  }
++  iframe {
++    position: absolute;
++    width: 40px;
++    height: 40px;
++    border: 0;
++  }
++</style>
++
++<div id=some></div>
++<iframe id=frame src='./browser_layoutHelpers_iframe.html'></iframe>
+diff --git a/browser/devtools/shared/test/browser_layoutHelpers.js b/browser/devtools/shared/test/browser_layoutHelpers.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/shared/test/browser_layoutHelpers.js
+@@ -0,0 +1,99 @@
++/* Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/ */
++
++// Tests that scrollIntoViewIfNeeded works properly.
++
++let imported = {};
++Components.utils.import("resource:///modules/devtools/LayoutHelpers.jsm",
++    imported);
++registerCleanupFunction(function () {
++  imported = {};
++});
++
++let LayoutHelpers = imported.LayoutHelpers;
++
++const TEST_URI = "http://example.com/browser/browser/devtools/shared/test/browser_layoutHelpers.html";
++
++function test() {
++  addTab(TEST_URI, function(browser, tab) {
++    info("Starting browser_layoutHelpers.js");
++    let doc = browser.contentDocument;
++    runTest(doc.defaultView, doc.getElementById('some'));
++    gBrowser.removeCurrentTab();
++    finish();
++  });
++}
++
++function runTest(win, some) {
++  some.style.top = win.innerHeight + 'px';
++  some.style.left = win.innerWidth + 'px';
++  // The tests start with a black 2x2 pixels square below bottom right.
++  // Do not resize the window during the tests.
++
++  win.scroll(win.innerWidth / 2, win.innerHeight + 2);  // Above the viewport.
++  LayoutHelpers.scrollIntoViewIfNeeded(some);
++  is(win.scrollY, Math.floor(win.innerHeight / 2) + 1,
++     'Element completely hidden above should appear centered.');
++
++  win.scroll(win.innerWidth / 2, win.innerHeight + 1);  // On the top edge.
++  LayoutHelpers.scrollIntoViewIfNeeded(some);
++  is(win.scrollY, win.innerHeight,
++     'Element partially visible above should appear above.');
++
++  win.scroll(win.innerWidth / 2, 0);  // Just below the viewport.
++  LayoutHelpers.scrollIntoViewIfNeeded(some);
++  is(win.scrollY, Math.floor(win.innerHeight / 2) + 1,
++     'Element completely hidden below should appear centered.');
++
++  win.scroll(win.innerWidth / 2, 1);  // On the bottom edge.
++  LayoutHelpers.scrollIntoViewIfNeeded(some);
++  is(win.scrollY, 2,
++     'Element partially visible below should appear below.');
++
++
++  win.scroll(win.innerWidth / 2, win.innerHeight + 2);  // Above the viewport.
++  LayoutHelpers.scrollIntoViewIfNeeded(some, false);
++  is(win.scrollY, win.innerHeight,
++     'Element completely hidden above should appear above ' +
++     'if parameter is false.');
++
++  win.scroll(win.innerWidth / 2, win.innerHeight + 1);  // On the top edge.
++  LayoutHelpers.scrollIntoViewIfNeeded(some, false);
++  is(win.scrollY, win.innerHeight,
++     'Element partially visible above should appear above ' +
++     'if parameter is false.');
++
++  win.scroll(win.innerWidth / 2, 0);  // Below the viewport.
++  LayoutHelpers.scrollIntoViewIfNeeded(some, false);
++  is(win.scrollY, 2,
++     'Element completely hidden below should appear below ' +
++     'if parameter is false.');
++
++  win.scroll(win.innerWidth / 2, 1);  // On the bottom edge.
++  LayoutHelpers.scrollIntoViewIfNeeded(some, false);
++  is(win.scrollY, 2,
++     'Element partially visible below should appear below ' +
++     'if parameter is false.');
++
++  // The case of iframes.
++  win.scroll(0, 0);
++
++  let frame = win.document.getElementById('frame');
++  let fwin = frame.contentWindow;
++
++  frame.style.top = win.innerHeight + 'px';
++  frame.style.left = win.innerWidth + 'px';
++
++  fwin.addEventListener('load', function frameLoad() {
++    let some = fwin.document.getElementById('some');
++    LayoutHelpers.scrollIntoViewIfNeeded(some);
++    is(win.scrollX, Math.floor(win.innerWidth / 2) + 20,
++       'Scrolling from an iframe should center the iframe vertically.');
++    is(win.scrollY, Math.floor(win.innerHeight / 2) + 20,
++       'Scrolling from an iframe should center the iframe horizontally.');
++    is(fwin.scrollX, Math.floor(fwin.innerWidth / 2) + 1,
++       'Scrolling from an iframe should center the element vertically.');
++    is(fwin.scrollY, Math.floor(fwin.innerHeight / 2) + 1,
++       'Scrolling from an iframe should center the element horizontally.');
++  }, false);
++}
+diff --git a/browser/devtools/shared/test/browser_layoutHelpers_iframe.html b/browser/devtools/shared/test/browser_layoutHelpers_iframe.html
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/shared/test/browser_layoutHelpers_iframe.html
+@@ -0,0 +1,19 @@
++<!doctype html>
++<meta charset=utf-8>
++<title> Layout Helpers </title>
++
++<style>
++  html {
++    height: 300%;
++    width: 300%;
++  }
++  div#some {
++    position: absolute;
++    background: black;
++    width: 2px;
++    height: 2px;
++  }
++</style>
++
++<div id=some></div>
++

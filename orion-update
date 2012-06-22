@@ -3,7 +3,7 @@
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
 # Date 1339175186 -10800
 # Node ID ae8cb025164462d3b39784655fa082ad974fb38c
-# Parent 32975daf82d78efa6aafd7d00ef38ccec0b18161
+# Parent 06873a64a192af290235c7ca4383d7cb984cf768
 Bug 759351 - Update Orion from upstream
 
 diff --git a/browser/devtools/sourceeditor/orion/Makefile.dryice.js b/browser/devtools/sourceeditor/orion/Makefile.dryice.js
@@ -22359,7 +22359,15 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
    },
  
    /**
-@@ -775,39 +815,25 @@ SourceEditor.prototype = {
+@@ -768,6 +808,7 @@ SourceEditor.prototype = {
+ 
+   /**
+    * Highlight the current line using the Orion annotation model.
++   * If some text is selected, do not highlight the current line.
+    *
+    * @private
+    * @param object aEvent
+@@ -775,39 +816,34 @@ SourceEditor.prototype = {
     */
    _highlightCurrentLine: function SE__highlightCurrentLine(aEvent)
    {
@@ -22375,21 +22383,30 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 -        annotationModel.removeAnnotation(oldAnnotation);
 -        this._currentLineAnnotation = null;
 +    if (this._model) {
++      let type = this._annotationType.ANNOTATION_CURRENT_LINE;
++
++      // Gather information about the new line.
 +      let lineIndex = this._model.getLineAtOffset(newSelection.start);
 +      let start = this._model.getLineStart(lineIndex);
 +      let end = this._model.getLineEnd(lineIndex);
-+      let type = this._annotationType.ANNOTATION_CURRENT_LINE;
 +
-+      let remove = this._currentLineAnnotation;
-+      if (remove) {
-+        remove.start = oldSelection.start;
-+        remove.end = oldSelection.end;
++      // Construct the line whose highlighting we must remove.
++      let remove = null;
++      if (this._currentLineAnnotation) {
++        this._currentLineAnnotation.start = oldSelection.start;
++        this._currentLineAnnotation.end = oldSelection.end;
++        remove = [this._currentLineAnnotation];
        }
 -      return;
 +
-+      this._currentLineAnnotation = this._annotationType.createAnnotation(type, start, end);
-+      this._annotationModel.replaceAnnotations(remove ? [remove] : null,
-+                                               [this._currentLineAnnotation]);
++      // Only add annotation for the current line if the selection is empty.
++      let add = this._currentLineAnnotation = null;
++      if (newSelection.start === newSelection.end) {
++        this._currentLineAnnotation =
++            this._annotationType.createAnnotation(type, start, end);
++        add = [this._currentLineAnnotation];
++      }
++      this._annotationModel.replaceAnnotations(remove, add);
      }
 -
 -    let line = model.getLineAtOffset(newSelection.start);
@@ -22414,7 +22431,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
    },
  
    /**
-@@ -2030,3 +2056,40 @@ SourceEditor.prototype = {
+@@ -2030,3 +2066,40 @@ SourceEditor.prototype = {
      this._lastFind = null;
    },
  };

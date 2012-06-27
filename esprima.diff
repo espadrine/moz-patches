@@ -1,6 +1,8 @@
 # HG changeset patch
 # Parent 92141ddf7603fa051accfe04e3c16bd29004042e
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
+Bug 759837 - Integrate esprima into devtools/shared for use in Scratchpad and Debugger
+
 diff --git a/browser/devtools/shared/Esprima.jsm b/browser/devtools/shared/Esprima.jsm
 new file mode 100644
 --- /dev/null

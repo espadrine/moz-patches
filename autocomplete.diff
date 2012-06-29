@@ -1,0 +1,1175 @@
+# HG changeset patch
+# Parent edf5eac1edfa15d6d6c636f0103463a5985ddc00
+# User Thaddee Tyl <thaddee.tyl@gmail.com>
+Bug 762164 - Implement Autocomplete in Scratchpad
+
+diff --git a/browser/devtools/sourceeditor/orion/Makefile.dryice.js b/browser/devtools/sourceeditor/orion/Makefile.dryice.js
+--- a/browser/devtools/sourceeditor/orion/Makefile.dryice.js
++++ b/browser/devtools/sourceeditor/orion/Makefile.dryice.js
+@@ -34,6 +34,7 @@ var project = copy.createCommonJsProject
+ 
+ project.ignoredModules["orion/textview/i18nUtil"] = true;
+ project.ignoredModules["i18n!orion/textview/nls/messages"] = true;
++project.ignoredModules["i18n!orion/editor/nls/messages"] = true;
+ 
+ copy({
+   source: [createOrionScriptPrefix, {
+@@ -46,6 +47,8 @@ copy({
+       "orion/textview/textDND",
+       "orion/textview/textView",
+       "orion/textview/undoStack",
++      "orion/editor/contentAssist",
++      "orion/editor/jsContentAssist",
+     ],
+   }, createOrionScriptSuffix],
+   dest: DEST_JS,
+diff --git a/browser/devtools/sourceeditor/orion/orion.js b/browser/devtools/sourceeditor/orion/orion.js
+--- a/browser/devtools/sourceeditor/orion/orion.js
++++ b/browser/devtools/sourceeditor/orion/orion.js
+@@ -12062,6 +12062,1053 @@ define("orion/textview/undoStack", [], f
+ 		UndoStack: UndoStack
+ 	};
+ });
+-
++/*******************************************************************************
++ * @license
++ * Copyright (c) 2011, 2012 IBM Corporation and others.
++ * All rights reserved. This program and the accompanying materials are made 
++ * available under the terms of the Eclipse Public License v1.0 
++ * (http://www.eclipse.org/legal/epl-v10.html), and the Eclipse Distribution 
++ * License v1.0 (http://www.eclipse.org/org/documents/edl-v10.html). 
++ *
++ * Contributors:
++ *     IBM Corporation - initial API and implementation
++ *******************************************************************************/
++/*global define */
++/*jslint maxerr:150 browser:true devel:true */
++
++define("orion/editor/contentAssist", ['i18n!orion/editor/nls/messages', 'orion/textview/keyBinding', 'orion/textview/eventTarget'], function(messages, mKeyBinding, mEventTarget) {
++	var Promise = (function() {
++		function Promise() {
++		}
++		Promise.prototype.then = function(callback) {
++			this.callback = callback;
++			if (this.result) {
++				var promise = this;
++				setTimeout(function() { promise.callback(promise.result); }, 0);
++			}
++		};
++		Promise.prototype.done = function(result) {
++			this.result = result;
++			if (this.callback) {
++				this.callback(this.result);
++			}
++		};
++		return Promise;
++	}());
++
++	/**
++	 * @name orion.editor.ContentAssistProvider
++	 * @class Interface defining a provider of content assist proposals.
++	 */
++	/**
++	 * @methodOf orion.editor.ContentAssistProvider.prototype
++	 * @name computeProposals
++	 * @param {String} buffer The buffer being edited.
++	 * @param {Number} offset The position in the buffer at which content assist is being requested.
++	 * @param {orion.editor.ContentAssistProvider.Context} context
++	 * @returns {Object[]} This provider's proposals for the given buffer and offset.
++	 */
++	/**
++	 * @name orion.editor.ContentAssistProvider.Context
++	 * @class
++	 * @property {String} line The text of the line on which content assist is being requested.
++	 * @property {String} prefix Any non-whitespace, non-symbol characters preceding the offset.
++	 * @property {orion.textview.Selection} selection The current selection.
++	 */
++
++	/**
++	 * @name orion.editor.ContentAssist
++	 * @class Provides content assist for a TextView.
++	 * @description Creates a <code>ContentAssist</code> for a TextView. A ContentAssist consults a set of 
++	 * {@link orion.editor.ContentAssistProvider}s to obtain proposals for text that may be inserted into a
++	 * TextView at a given offset.<p>
++	 * A ContentAssist is generally activated by its TextView action, at which point it computes the set of 
++	 * proposals available. It will re-compute the proposals in response to subsequent changes on the TextView 
++	 * (for example, user typing) for as long as the ContentAssist is active. A proposal may be applied by calling 
++	 * {@link #apply}, after which the ContentAssist becomes deactivated. An active ContentAssist may be deactivated
++	 * by calling {@link #deactivate}.<p>
++	 * A ContentAssist dispatches events when it becomes activated or deactivated, and when proposals have been computed.
++	 * @param {orion.textview.TextView} textView The TextView to provide content assist for.
++	 * @borrows orion.textview.EventTarget#addEventListener as #addEventListener
++	 * @borrows orion.textview.EventTarget#removeEventListener as #removeEventListener
++	 * @borrows orion.textview.EventTarget#dispatchEvent as #dispatchEvent
++	 */
++	/**
++	 * Dispatched when a ContentAssist is about to be activated.
++	 * @name orion.editor.ContentAssist#ActivatingEvent
++	 * @event
++	 */
++	/**
++	 * Dispatched when a ContentAssist is about to be deactivated.
++	 * @name orion.editor.ContentAssist#DeactivatingEvent
++	 * @event
++	 */
++	/**
++	 * Dispatched when a ContentAssist has applied a proposal. <p>This event's <code>data</code> field gives information
++	 * about the proposal that was applied.
++	 * @name orion.editor.ContentAssist#ProposalAppliedEvent
++	 * @event
++	 */
++	/**
++	 * Dispatched whenever a ContentAssist has obtained proposals from its providers. <p>This event's
++	 * <code>data</code> field gives information about the proposals.
++	 * @name orion.editor.ContentAssist#ProposalsComputedEvent
++	 * @event
++	 */
++	// INACTIVE --Ctrl+Space--> ACTIVE --ModelChanging--> FILTERING
++	var State = {
++		INACTIVE: 1,
++		ACTIVE: 2,
++		FILTERING: 3
++	};
++	function ContentAssist(textView) {
++		this.textView = textView;
++		this.state = State.INACTIVE;
++		this.providers = [];
++		var self = this;
++		this.contentAssistListener = {
++			onModelChanging: function(event) {
++				if (self.isDeactivatingChange(event)) {
++					self.setState(State.INACTIVE);
++				} else {
++					if (self.state === State.ACTIVE) {
++						self.setState(State.FILTERING);
++					}
++				}
++			},
++			onScroll: function(event) {
++				self.setState(State.INACTIVE);
++			},
++			onSelection: function(event) {
++				var state = self.state;
++				if (state === State.ACTIVE || state === State.FILTERING) {
++					self.computeProposals();
++					self.setState(State.FILTERING);
++				}
++			}
++		};
++		var isMac = navigator.platform.indexOf("Mac") !== -1;
++		textView.setKeyBinding(isMac ? new mKeyBinding.KeyBinding(' ', false, false, false, true) : new mKeyBinding.KeyBinding(' ', true), "contentAssist");
++		textView.setAction("contentAssist", function() {
++			self.activate();
++			return true;
++		}, {name: messages.contentAssist});
++	}
++	ContentAssist.prototype = /** @lends orion.editor.ContentAssist.prototype */ {
++		/**
++		 * Applies the given proposal to the TextView.
++		 * @param {Object} [proposal]
++		 * @returns {Boolean} <code>true</code> if the proposal was applied; <code>false</code> if no proposal was provided.
++		 */
++		apply: function(proposal) {
++			if (!proposal) {
++				return false;
++			}
++			var offset = this.textView.getCaretOffset();
++			var data = {
++				proposal: proposal,
++				start: offset,
++				end: offset
++			};
++			this.setState(State.INACTIVE);
++			var proposalText = proposal.proposal || proposal;
++			this.textView.setText(proposalText, offset, offset);
++			this.dispatchEvent({type: "ProposalApplied", data: data});
++			return true;
++		},
++		activate: function() {
++			if (this.state === State.INACTIVE) {
++				this.setState(State.ACTIVE);
++			}
++		},
++		deactivate: function() {
++			this.setState(State.INACTIVE);
++		},
++		/** @returns {orion.textview.TextView} */
++		getTextView: function() {
++			return this.textView;
++		},
++		/** @returns {Boolean} */
++		isActive: function() {
++			return this.state === State.ACTIVE || this.state === State.FILTERING;
++		},
++		/** @returns {Boolean} <code>true</code> if the event describes a change that should deactivate content assist. */
++		isDeactivatingChange: function(/**orion.textview.ModelChangingEvent*/ event) {
++			var deletion = event.removedCharCount > 0 && event.addedCharCount === 0,
++			    view = this.textView,
++			    overWhitespace = (event.start+1 <= view.getModel().getCharCount()) && /^\s*$/.test(view.getText(event.start, event.start+1));
++			return event.removedLineCount > 0 || (deletion && overWhitespace);
++		},
++		/** @private */
++		setState: function(state) {
++			var eventType;
++			if (state === State.ACTIVE) {
++				eventType = "Activating";
++			} else if (state === State.INACTIVE) {
++				eventType = "Deactivating";
++			}
++			if (eventType) {
++				this.dispatchEvent({type: eventType});
++			}
++			this.state = state;
++			this.onStateChange(state);
++		},
++		/** @private */
++		onStateChange: function(state) {
++			if (state === State.INACTIVE) {
++				if (this.listenerAdded) {
++					this.textView.removeEventListener("ModelChanging", this.contentAssistListener.onModelChanging);
++					this.textView.removeEventListener("Scroll", this.contentAssistListener.onScroll);
++					this.textView.removeEventListener("Selection", this.contentAssistListener.onSelection);
++					this.listenerAdded = false;
++				}
++			} else if (state === State.ACTIVE) {
++				if (!this.listenerAdded) {
++					this.textView.addEventListener("ModelChanging", this.contentAssistListener.onModelChanging);
++					this.textView.addEventListener("Scroll", this.contentAssistListener.onScroll);
++					this.textView.addEventListener("Selection", this.contentAssistListener.onSelection);
++					this.listenerAdded = true;
++				}
++				this.computeProposals();
++			}
++		},
++		/**
++		 * Computes the proposals at the TextView's current caret offset.
++		 */
++		computeProposals: function() {
++			var self = this;
++			var offset = this.textView.getCaretOffset();
++			this._computeProposals(offset).then(function(proposals) {
++				self.dispatchEvent({type: "ProposalsComputed", data: {proposals: proposals}});
++			});
++		},
++		/** @private */
++		getPrefixStart: function(end) {
++			var index = end;
++			while (index > 0 && /[A-Za-z0-9_]/.test(this.textView.getText(index - 1, index))) {
++				index--;
++			}
++			return index;
++		},
++		/**
++		 * @private
++		 * Retrieves the proposals at the given offset.
++		 * @param {Number} offset The caret offset.
++		 * @returns {Promise} A promise that will provide the proposals.
++		 */
++		_computeProposals: function(offset) {
++			var proposals = [],
++			    numComplete = 0,
++			    promise = new Promise(),
++			    providers = this.providers;
++			function collectProposals(result) {
++				if (result) {
++					proposals = proposals.concat(result);
++				}
++				if (++numComplete === providers.length) {
++					promise.done(proposals);
++				}
++			}
++			function errback() {
++				if (++numComplete === providers.length) {
++					promise.done(proposals);
++				}
++			}
++			var textView = this.textView, textModel = textView.getModel();
++			var buffer = textView.getText();
++			var context = {
++				line: textModel.getLine(textModel.getLineAtOffset(offset)),
++				prefix: textView.getText(this.getPrefixStart(offset), offset),
++				selection: textView.getSelection()
++			};
++			for (var i=0; i < providers.length; i++) {
++				var provider = providers[i];
++				//prefer computeProposals but support getProposals for backwards compatibility
++				var proposalsFunc = provider.getProposals;
++				if (typeof provider.computeProposals === "function") {
++					proposalsFunc = provider.computeProposals;
++				}
++				var proposalsPromise = proposalsFunc.apply(provider, [buffer, offset, context]);
++				if (proposalsPromise && proposalsPromise.then) {
++					proposalsPromise.then(collectProposals, errback);
++				} else {
++					collectProposals(proposalsPromise);
++				}
++			}
++			return promise;
++		},
++		/**
++		 * Sets the content assist providers that this ContentAssist will consult to obtain proposals.
++		 * @param {orion.editor.ContentAssistProvider[]} providers The providers.
++		 */
++		setProviders: function(providers) {
++			this.providers = providers.slice(0);
++		}
++	};
++	mEventTarget.EventTarget.addMixin(ContentAssist.prototype);
++
++	/**
++	 * @name orion.editor.ContentAssistMode
++	 * @class Editor mode for interacting with content assist proposals.
++	 * @description Creates a ContentAssistMode. A ContentAssistMode is a key mode for {@link orion.editor.Editor}
++	 * that provides interaction with content assist proposals retrieved from an {@link orion.editor.ContentAssist}. 
++	 * Interaction is performed via the {@link #lineUp}, {@link #lineDown}, and {@link #enter} actions. An 
++	 * {@link orion.editor.ContentAssistWidget} may optionally be provided to display which proposal is currently selected.
++	 * @param {orion.editor.ContentAssist} contentAssist
++	 * @param {orion.editor.ContentAssistWidget} [ContentAssistWidget]
++	 */
++	function ContentAssistMode(contentAssist, ContentAssistWidget) {
++		this.contentAssist = contentAssist;
++		this.widget = ContentAssistWidget;
++		this.proposals = [];
++		var self = this;
++		this.contentAssist.addEventListener("ProposalsComputed", function(event) {
++			self.proposals = event.data.proposals;
++			self.selectedIndex = self.proposals.length ? 0 : -1;
++		});
++	}
++	ContentAssistMode.prototype = /** @lends orion.editor.ContentAssistMode.prototype */ {
++		cancel: function() {
++			this.getContentAssist().deactivate();
++		},
++		/** @private */
++		getContentAssist: function() {
++			return this.contentAssist;
++		},
++		isActive: function() {
++			return this.getContentAssist().isActive();
++		},
++		lineUp: function() {
++			this.selectedIndex = (this.selectedIndex === 0) ? this.proposals.length - 1 : this.selectedIndex - 1;
++			if (this.widget) {
++				this.widget.setSelectedIndex(this.selectedIndex);
++			}
++			return true;
++		},
++		lineDown: function() {
++			this.selectedIndex = (this.selectedIndex === this.proposals.length - 1) ? 0 : this.selectedIndex + 1;
++			if (this.widget) {
++				this.widget.setSelectedIndex(this.selectedIndex);
++			}
++			return true;
++		},
++		enter: function() {
++			var proposal = this.proposals[this.selectedIndex] || null;
++			return this.contentAssist.apply(proposal);
++		},
++		tab: function() {
++			if (this.widget) {
++				this.widget.createAccessible(this);
++				this.widget.parentNode.focus();
++				return true;
++			} else {
++				return false;
++			}
++		}
++	};
++
++	/**
++	 * @name orion.editor.ContentAssistWidget
++	 * @class Displays proposals from a {@link orion.editor.ContentAssist}.
++	 * @description Creates a ContentAssistWidget that will display proposals from the given {@link orion.editor.ContentAssist}
++	 * in the given <code>parentNode</code>. Clicking a proposal will cause the ContentAssist to apply that proposal.
++	 * @param {orion.editor.ContentAssist} contentAssist
++	 * @param {String|DomNode} parentNode The ID or DOM node to use as the parent for displaying proposals.
++	 */
++	function ContentAssistWidget(contentAssist, parentNode) {
++		this.contentAssist = contentAssist;
++		this.parentNode = typeof parentNode === "string" ? document.getElementById(parentNode) : parentNode;
++		this.textView = this.contentAssist.getTextView();
++		this.textViewListenerAdded = false;
++		var self = this;
++		this.textViewListener = {
++			onMouseDown: function(event) {
++				if (event.event.target.parentElement !== self.parentNode) {
++					self.contentAssist.deactivate();
++				}
++				// ignore the event if this is a click inside of the parentNode
++				// the click is handled by the onClick() function
++			}
++		};
++		this.contentAssist.addEventListener("ProposalsComputed", function(event) {
++			self.setProposals(event.data.proposals);
++			self.show();
++			if (!self.textViewListenerAdded) {
++				self.textView.addEventListener("MouseDown", self.textViewListener.onMouseDown);
++				self.textViewListenerAdded = true;
++			}
++		});
++		this.contentAssist.addEventListener("Deactivating", function(event) {
++			self.setProposals([]);
++			self.hide();
++			if (self.textViewListenerAdded) {
++				self.textView.removeEventListener("MouseDown", self.textViewListener.onMouseDown);
++				self.textViewListenerAdded = false;
++			}
++			self.textViewListenerAdded = false;
++		});
++	}
++	ContentAssistWidget.prototype = /** @lends orion.editor.ContentAssistWidget.prototype */ {
++		/** @private */
++		onClick: function(e) {
++			this.contentAssist.apply(this.getProposal(e.target));
++			this.textView.focus();
++		},
++		/** @private */
++		createDiv: function(proposal, isSelected, parent, itemIndex) {
++			var div = document.createElement("div");
++			div.id = "contentoption" + itemIndex;
++			div.setAttribute("role", "option");
++			if (isSelected) {
++				div.className = "selected";
++				this.parentNode.setAttribute("aria-activedescendant", div.id);
++			}
++			var textNode = document.createTextNode(proposal);
++			div.appendChild(textNode, div);
++			parent.appendChild(div);
++		},
++		/** @private */
++		createAccessible: function(mode) {
++			if(!this._isAccessible) {
++				this.parentNode.addEventListener("keydown", function(evt) {
++					evt.preventDefault();
++					if(evt.keyCode === 27) {return mode.cancel(); }
++					else if(evt.keyCode === 38) { return mode.lineUp(); }
++					else if(evt.keyCode === 40) { return mode.lineDown(); }
++					else if(evt.keyCode === 13) { return mode.enter(); }
++					return false;
++				});
++			}
++			this._isAccessible = true;
++		},
++		/** @private */
++		getDisplayString: function(proposal) {
++			//for simple string content assist, the display string is just the proposal
++			if (typeof proposal === "string") {
++				return proposal;
++			}
++			//return the description if applicable
++			if (proposal.description && typeof proposal.description === "string") {
++				return proposal.description;
++			}
++			//by default return the straight proposal text
++			return proposal.proposal;
++		},
++		/**
++		 * @private
++		 * @returns {Object} The proposal represented by the given node.
++		 */
++		getProposal: function(/**DOMNode*/ node) {
++			var nodeIndex = 0;
++			for (var child = this.parentNode.firstChild; child !== null; child = child.nextSibling) {
++				if (child === node) {
++					return this.proposals[nodeIndex] || null;
++				}
++				nodeIndex++;
++			}
++			return null;
++		},
++		/** Sets the index of the currently selected proposal. */
++		setSelectedIndex: function(/**Number*/ index) {
++			this.selectedIndex = index;
++			this.selectNode(this.parentNode.childNodes[this.selectedIndex]);
++		},
++		/** @private */
++		selectNode: function(/**DOMNode*/ node) {
++			var nodes = this.parentNode.childNodes;
++			for (var i=0; i < nodes.length; i++) {
++				var child = nodes[i];
++				if (child.className === "selected") {
++					child.className = "";
++				}
++				if (child === node) {
++					child.className = "selected";
++					this.parentNode.setAttribute("aria-activedescendant", child.id);
++					child.focus();
++					if (child.offsetTop < this.parentNode.scrollTop) {
++						child.scrollIntoView(true);
++					} else if ((child.offsetTop + child.offsetHeight) > (this.parentNode.scrollTop + this.parentNode.clientHeight)) {
++						child.scrollIntoView(false);
++					}
++				}
++			}
++		},
++		setProposals: function(/**Object[]*/ proposals) {
++			this.proposals = proposals;
++		},
++		show: function() {
++			if (this.proposals.length === 0) {
++				this.hide();
++				return;
++			}
++			var caretLocation = this.textView.getLocationAtOffset(this.textView.getCaretOffset());
++			caretLocation.y += this.textView.getLineHeight();
++			this.parentNode.innerHTML = "";
++			for (var i = 0; i < this.proposals.length; i++) {
++				this.createDiv(this.getDisplayString(this.proposals[i]), i===0, this.parentNode, i);
++			}
++			this.textView.convert(caretLocation, "document", "page");
++			this.parentNode.style.position = "absolute";
++			this.parentNode.style.left = caretLocation.x + "px";
++			this.parentNode.style.top = caretLocation.y + "px";
++			this.parentNode.style.display = "block";
++			this.parentNode.scrollTop = 0;
++
++			// Make sure that the panel is never outside the viewport
++			var viewportWidth = document.documentElement.clientWidth,
++			    viewportHeight =  document.documentElement.clientHeight;
++			if (caretLocation.y + this.parentNode.offsetHeight > viewportHeight) {
++				this.parentNode.style.top = (caretLocation.y - this.parentNode.offsetHeight - this.textView.getLineHeight()) + "px";
++			}
++			if (caretLocation.x + this.parentNode.offsetWidth > viewportWidth) {
++				this.parentNode.style.left = (viewportWidth - this.parentNode.offsetWidth) + "px";
++			}
++			this.parentNode.onclick = this.onClick.bind(this);
++		},
++		hide: function() {
++			if(document.activeElement === this.parentNode) {
++				this.textView.focus();
++			}
++			this.parentNode.style.display = "none";
++			this.parentNode.onclick = null;
++		}
++	};
++	return {
++		ContentAssist: ContentAssist,
++		ContentAssistMode: ContentAssistMode,
++		ContentAssistWidget: ContentAssistWidget
++	};
++});
++/*******************************************************************************
++ * @license
++ * Copyright (c) 2011 IBM Corporation and others.
++ * All rights reserved. This program and the accompanying materials are made 
++ * available under the terms of the Eclipse Public License v1.0 
++ * (http://www.eclipse.org/legal/epl-v10.html), and the Eclipse Distribution 
++ * License v1.0 (http://www.eclipse.org/org/documents/edl-v10.html). 
++ *
++ * Contributors:
++ *     IBM Corporation - initial API and implementation
++ *******************************************************************************/
++/*global define */
++
++define("orion/editor/jsContentAssist", [], function() {
++
++	/**
++	 * Properties common to all objects - ECMA 262, section 15.2.4.
++	 * @see addPropertyProposals
++	 */
++	var objectProps = [
++		{name: "toString"}, 
++		{name: "toLocaleString"}, 
++		{name: "valueOf"}, 
++		{name: "hasOwnProperty", args: ["property"]},
++		{name: "isPrototypeOf", args: ["object"]},
++		{name: "propertyIsEnumerable", args: ["property"]}
++	];
++
++	/**
++	 * Properties common to all Strings - ECMA 262, section 15.5.4
++	 * @see addPropertyProposals
++	 */
++	var stringProps = [
++		{name: "charAt", args: ["index"]},
++		{name: "charCodeAt", args: ["index"]},
++		{name: "concat", args: ["array"]},
++		{name: "indexOf", args: ["searchString", "[position]"]},
++		{name: "lastIndexOf", args: ["searchString", "[position]"]},
++		{name: "length", field: true},
++		{name: "localeCompare", args: ["object"]},
++		{name: "match", args: ["regexp"]},
++		{name: "replace", args: ["searchValue", "replaceValue"]},
++		{name: "search", args: ["regexp"]},
++		{name: "slice", args: ["start", "end"]},
++		{name: "split", args: ["separator", "[limit]"]},
++		{name: "substring", args: ["start", "[end]"]},
++		{name: "toLowerCase"},
++		{name: "toLocaleLowerCase"},
++		{name: "toUpperCase"},
++		{name: "toLocaleUpperCase"},
++		{name: "trim"}
++	];
++
++	/**
++	 * Returns a string of all the whitespace at the start of the current line.
++	 * @param {String} buffer The document
++	 * @param {Integer} offset The current selection offset
++	 */
++	function leadingWhitespace(buffer, offset) {
++		var whitespace = "";
++		offset = offset-1;
++		while (offset > 0) {
++			var c = buffer.charAt(offset--);
++			if (c === '\n' || c === '\r') {
++				//we hit the start of the line so we are done
++				break;
++			}
++			if (/\s/.test(c)) {
++				//we found whitespace to add it to our result
++				whitespace = c.concat(whitespace);
++			} else {
++				//we found non-whitespace, so reset our result
++				whitespace = "";
++			}
++
++		}
++		return whitespace;
++	}
++	
++	/**
++	 * Returns the current line up to, but not including, the prefix
++	 */
++	function prefixLine(prefix, buffer, startOffset) {
++		var offset = startOffset-1;
++		while (offset > 0) {
++			var c = buffer.charAt(offset);
++			if (c === '\n' || c === '\r') {
++				//we hit the start of the line so we are done
++				break;
++			}
++			offset--;
++		}
++		return buffer.substring(offset+1, (startOffset-prefix.length));
++	}
++	
++	/**
++	 * Attempts to infer the type of the receiver of a function.
++	 */
++	function inferType(prefix, buffer, offset) {
++		var line = prefixLine(prefix, buffer, offset);
++		//Note: we already know at this point the line ends with a dot
++		//if the last character is a quote and there is an odd number of quotes on the line, then we have a string literal
++		if (line.length > 1 && (line.charAt(line.length-2) === "\"" || line.charAt(line.length-2) === "'")) {
++			return "String";
++		}
++		//we failed to infer the type
++		return null;
++	}
++
++	/** 
++	 * Removes prefix from string.
++	 * @param {String} prefix
++	 * @param {String} string
++	 */
++	function chop(prefix, string) {
++		return string.substring(prefix.length);
++	}
++	
++	/**
++	 * Adds proposals for the given property descriptions (methods and fields) to the proposal list.
++	 * @param properties {Array} Array of property description objects. Each object
++	 * has a 'name' property indicating the function name, and an 'args' property
++	 * which is an array of strings indicating the function arguments. Example: {name: "charAt", args: ["index"]}.
++	 * A property can also have a 'field' boolean property indicating it is a field. If the 'field'
++	 * property is not specified it is assumed to be a function.
++	 * @param objectName {String} The name of the object associated with these functions
++	 * @param prefix {String} The content assist prefix
++	 * @param offset {Number} The buffer offset for which content assist was invoked.
++	 * @param proposals {Array} The current array of proposal objects.
++	 */
++	function addPropertyProposals(properties, objectName, prefix, offset, proposals) {
++		var text, description, positions, endOffset;
++		for (var i = 0; i < properties.length; i++) {
++			var name = properties[i].name;
++			//don't bother computing proposals that don't match
++			if (name.indexOf(prefix) !== 0) {
++				continue;
++			}
++			var args = properties[i].args;
++			if (!args || args.length === 0) {
++				//don't use linked mode for functions with no arguments
++				text = name + (properties[i].field ? "" : "()");
++				description = text + " - " + objectName;
++				proposals.push({proposal: chop(prefix, text), description: description});
++				continue;
++			}
++			text = name + "(";
++			//add linked mode position for each function argument
++			positions = [];
++			endOffset = offset + name.length+1 - prefix.length;
++			for (var argIndex = 0; argIndex < args.length; argIndex++) {
++				positions.push({offset: endOffset, length: args[argIndex].length});
++				endOffset += args[argIndex].length+2;//add extra for comma and space
++				//add argument to completion string
++				text += args[argIndex];
++				if (argIndex < args.length - 1) {
++					text += ", ";
++				}
++			}
++			text += ")";
++			description = text + " - " + objectName;
++			endOffset--;//no comma after last argument
++			proposals.push({proposal: chop(prefix, text), description: description, positions: positions, escapePosition: endOffset});
++		}
++	}
++
++	/**
++	 * Returns proposals for completion on members of an object
++	 */
++	function getMemberProposals(prefix, buffer, offset) {
++		var proposals = [];
++
++		var type = inferType(prefix, buffer, offset);
++		if (type === "String") {
++			addPropertyProposals(stringProps, "String", prefix, offset, proposals);
++		}
++		
++		//properties common to all objects
++		addPropertyProposals(objectProps, "Object", prefix, offset, proposals);
++
++		return proposals;
++	}
++
++	/**
++	 * Returns proposals for javascript templates
++	 */
++	function getTemplateProposals(prefix, buffer, offset) {
++		//any returned positions need to be offset based on current cursor position and length of prefix
++		var startOffset = offset-prefix.length;
++		var proposals = [];
++		var whitespace = leadingWhitespace(buffer, offset);
++		//common vars for each proposal
++		var text, description, positions, endOffset;
++		if ("if".indexOf(prefix) === 0) {
++			//if statement
++			text = "if (condition) {\n" + whitespace + "\t\n" + whitespace + '}';
++			description = "if - if statement";
++			positions = [{offset: startOffset+4, length: 9}];
++			endOffset = startOffset+whitespace.length+18;//after indentation inside if body
++			proposals.push({proposal: chop(prefix, text), description: description, positions: positions, escapePosition: endOffset});
++			//if/else statement
++			text = "if (condition) {\n" + whitespace + "\t\n" + whitespace + "} else {\n" + whitespace + "\t\n" + whitespace + "}";
++			description = "if - if else statement";
++			positions = [{offset: startOffset+4, length: 9}];
++			endOffset = startOffset+whitespace.length+18;//after indentation inside if body
++			proposals.push({proposal: chop(prefix, text), description: description, positions: positions, escapePosition: endOffset});
++		}
++		if ("for".indexOf(prefix) === 0) {
++			//for loop
++			text = "for (var i = 0; i < array.length; i++) {\n" + whitespace + "\t\n" + whitespace + '}';
++			description = "for - iterate over array";
++			positions = [{offset: startOffset+9, length: 1}, {offset: startOffset+20, length: 5}];
++			endOffset = startOffset+whitespace.length+42;//after indentation inside for loop body
++			proposals.push({proposal: chop(prefix, text), description: description, positions: positions, escapePosition: endOffset});
++			//for ... in statement
++			text = "for (var property in object) {\n" + whitespace + "\tif (object.hasOwnProperty(property)) {\n" + 
++				whitespace + "\t\t\n" + whitespace + "\t}\n" + whitespace + '}';
++			description = "for..in - iterate over properties of an object";
++			positions = [{offset: startOffset+9, length: 8}, {offset: startOffset+21, length: 6}];
++			endOffset = startOffset+(2*whitespace.length)+73;//after indentation inside if statement body
++			proposals.push({proposal: chop(prefix, text), description: description, positions: positions, escapePosition: endOffset});
++		}
++		//while loop
++		if ("while".indexOf(prefix) === 0) {
++			text = "while (condition) {\n" + whitespace + "\t\n" + whitespace + '}';
++			description = "while - while loop with condition";
++			positions = [{offset: startOffset+7, length: 9}];
++			endOffset = startOffset+whitespace.length+21;//after indentation inside while loop body
++			proposals.push({proposal: chop(prefix, text), description: description, positions: positions, escapePosition: endOffset});
++		}
++		//do/while loop
++		if ("do".indexOf(prefix) === 0) {
++			text = "do {\n" + whitespace + "\t\n" + whitespace + "} while (condition);";
++			description = "do - do while loop with condition";
++			positions = [{offset: startOffset+16, length: 9}];
++			endOffset = startOffset+whitespace.length+6;//after indentation inside do/while loop body
++			proposals.push({proposal: chop(prefix, text), description: description, positions: positions, escapePosition: endOffset});
++		}
++		//switch statement
++		if ("switch".indexOf(prefix) === 0) {
++			text = "switch (expression) {\n" + whitespace + "\tcase value1:\n" + whitespace + "\t\t\n" +
++			whitespace + "\t\tbreak;\n" + whitespace + "\tdefault:\n" + whitespace + "}";
++			description = "switch - switch case statement";
++			positions = [{offset: startOffset+8, length: 10}, {offset: startOffset + 28, length: 6}];
++			endOffset = startOffset+(2*whitespace.length)+38;//after indentation inside first case statement
++			proposals.push({proposal: chop(prefix, text), description: description, positions: positions, escapePosition: endOffset});
++		}
++		if ("try".indexOf(prefix) === 0) {
++			//try..catch statement
++			text = "try {\n" + whitespace + "\t\n" + whitespace + "} catch (err) {\n" + whitespace + "}";
++			description = "try - try..catch statement";
++			endOffset = startOffset+whitespace.length+7;//after indentation inside try statement
++			proposals.push({proposal: chop(prefix, text), description: description, escapePosition: endOffset});
++			//try..catch..finally statement
++			text = "try {\n" + whitespace + "\t\n" + whitespace + "} catch (err) {\n" + whitespace +
++				"} finally {\n" + whitespace + "}";
++			description = "try - try..catch statement with finally block";
++			endOffset = startOffset+whitespace.length+7;//after indentation inside try statement
++			proposals.push({proposal: chop(prefix, text), description: description, escapePosition: endOffset});
++		}
++		return proposals;
++	}
++
++	/**
++	 * Returns proposals for javascript keywords.
++	 */
++	function getKeyWordProposals(prefix, buffer, offset) {
++		var keywords = ["break", "case", "catch", "continue", "debugger", "default", "delete", "do", "else", "finally", 
++			"for", "function", "if", "in", "instanceof", "new", "return", "switch", "this", "throw", "try", "typeof", 
++			"var", "void", "while", "with"];
++		var proposals = [];
++		for (var i = 0; i < keywords.length; i++) {
++			if (keywords[i].indexOf(prefix) === 0) {
++				proposals.push({proposal: chop(prefix, keywords[i]), description: keywords[i] });
++			}
++		}
++		return proposals;
++	}
++
++	/**
++	 * Given a block of javascript and a current index, skip any string literal or
++	 * comment starting at that position. Returns the index of the character after the
++	 * end of the comment or string. If the current character does not start a comment
++	 * or string, the unchanged index is returned.
++	 */
++	function skipCommentsAndStrings(buffer, index) {
++		var c = buffer.charAt(index);
++		switch (c) {
++			case "/" :
++				if (buffer.charAt(index+1) === "/") {
++					//we hit a line comment.. skip to end of line
++					index = buffer.indexOf("\n", index) + 2;
++					if (index === 1) {
++						return buffer.length;
++					}
++				} else if (buffer.charAt(index+1) === "*") {
++					//we hit a block comment, so jump to end of comment
++					index = buffer.indexOf("*/", index+2) + 2;
++					if (index === 1) {
++						return buffer.length;
++					}
++				} else {
++					//we hit a regular expression, so jump to end of expression or end of line
++					var lineEnd = buffer.indexOf("\n", index);
++					if (lineEnd < 0) {
++						lineEnd = buffer.length;
++					}
++					var regexEnd = buffer.indexOf("/", index+1);
++					//skip escaped frontslash inside regex
++					while (regexEnd > 0 && regexEnd < lineEnd && buffer.charAt(regexEnd-1) === "\\") {
++						regexEnd = buffer.indexOf("/", regexEnd+1);
++					}
++					index = (regexEnd > 0 && lineEnd > regexEnd) ? regexEnd : lineEnd;
++					//skip the regex or line terminator character
++					index++;
++				}
++				break;
++			case "\"":
++			case "\'":
++				//we hit a string so jump to end of string or line, whichever comes first
++				var lineEnd = buffer.indexOf("\n", index);
++				if (lineEnd < 0) {
++					lineEnd = buffer.length;
++				}
++				var stringEnd = buffer.indexOf(c, index+1);
++				//skip escaped quotes
++				while (stringEnd > 0 && stringEnd < lineEnd && buffer.charAt(stringEnd-1) === "\\") {
++					stringEnd = buffer.indexOf(c, stringEnd+1);
++				}
++				index = (stringEnd > 0 && lineEnd > stringEnd) ? stringEnd : lineEnd;
++				//skip the string or line terminator character
++				index++;
++				break;
++		}
++		return index;
++	}
++
++	/**
++	 * Given a block of javascript and the index of an opening brace, return the location
++	 * of the matching closing brace, or the end of the block if no matching brace is found.
++	 */
++	function findClosingBrace(buffer, start) {
++		var index = start, braceDepth = 0;
++		while (index < buffer.length) {
++			index = skipCommentsAndStrings(buffer, index);
++			var c = buffer.charAt(index);
++			switch (c) {
++				case "{":
++					braceDepth++;
++					break;
++				case "}":
++					if (--braceDepth === 0) {
++						//we found the end!
++						return index;
++					}
++					break;
++			}
++			index++;
++		}
++		return index;
++	}
++	
++	/**
++	 * Returns an array of all variables declared in the given block. Nested closures
++	 * are skipped.
++	 * @param block {String} A block of JavaScript code
++	 * @return {Array(String)} All variable names declared in the block
++	 */
++	function collectVariables(block) {
++		var variables = [];
++		var index = 0;
++		while ((index = skipCommentsAndStrings(block, index)) < block.length) {
++			var subBlock = block.substring(index);
++			if (subBlock.match(/^var\s/)) {
++				//block starts a variable declaration statement
++				//TODO variable assigned to a function has no semi-colon
++				var endDeclaration = block.indexOf(";", index);
++				if (endDeclaration < 0) {
++					endDeclaration = block.length;
++				}
++				//TODO handle multiple declarations in a single statement
++				var names = block.substring(index+3, endDeclaration).match(/[\w]+/);
++				if (names) {
++					variables.push(names[0]);
++					index += names[0].length;
++				}
++				
++				//skip to end of variable declaration
++				index = endDeclaration+1;
++			} else if (subBlock.match(/^function[\s(]/)) {
++				//block starts a function declaration, so skip the function
++				index = findClosingBrace(block, index);
++			} else {
++				//skip any words and trailing whitespace that start at current cursor position
++				var words = block.substring(index).match(/^\w[\w\s\()]+/);
++				if (words) {
++					index += words[0].length;
++				} else {
++					//nothing interesting here, go to next char and repeat
++					index++;
++				}
++			}
++		}
++		return variables;
++	}
++	
++	/**
++	 * Given a block of javascript, and a current cursor position, return the string of
++	 * the enclosing function. Returns null if no function is founed. The returned
++	 * function might not be well-formed but this function will make a best effort.
++	 */
++	function findEnclosingFunction(buffer, offset) {
++		var block = buffer.substring(0, offset);
++		var lastFunction = block.lastIndexOf("function");
++		if (lastFunction >= 0) {
++			var funcStart = block.indexOf("{", lastFunction);
++			var funcEnd = findClosingBrace(buffer, funcStart);
++			if (funcEnd < offset) {
++				//this is a peer function - look for its parent closure
++				return findEnclosingFunction(buffer, lastFunction);
++			}
++			//we found the enclosing function
++			return buffer.substring(lastFunction, funcEnd);
++		}
++		//nothing found
++		return null;
++	}
++
++	/**
++	 * Returns proposals for variables and arguments within the current function scope.
++	 */
++	function recursiveGetFunctionProposals(prefix, buffer, startOffset) {
++		var proposals = [];
++		var start, i;
++		
++		//search only the function containing the current cursor position
++		var block = findEnclosingFunction(buffer, startOffset);
++		var funcStart = 0;
++		if (block) {
++			funcStart = buffer.indexOf(block);
++			//collect function arguments
++			start = block.indexOf("(");
++			var end = block.indexOf(")");
++			if (start >= 0 && end >= 0) {
++				var argList = block.substring(start+1, end);
++				var args = argList.split(",");
++				for (i = 0; i < args.length; i++) {
++					var arg = args[i].trim();
++					if (arg.indexOf(prefix) === 0) {
++						proposals.push({proposal: chop(prefix, arg), description: arg});
++					}
++				}
++			}
++			//skip to opening brace to start function
++			start = block.indexOf("{");
++			if (start > 0) {
++				block = block.substring(start+1);
++			}
++		} else {
++			//no function found, assume the whole script is one closure
++			block = buffer;
++		}
++		//add proposals for all variables in the function
++		var variables = collectVariables(block);
++		for (i = 0; i < variables.length; i++) {
++			if (variables[i].indexOf(prefix) === 0) {
++				proposals.push({proposal: chop(prefix, variables[i]), description: variables[i]});
++			}
++		}
++		//recurse on parent closure
++		if (funcStart > 0) {
++			proposals = proposals.concat(recursiveGetFunctionProposals(prefix, buffer, funcStart));
++		}
++		return proposals;
++	}
++	
++	/**
++	 * Given a block of javascript, remove all comments and literals (strings, regex).
++	 * @param block {String} The javascript text
++	 */
++	function removeCommentsAndLiterals(block) {
++		var cleanBlock = "";
++		var index = 0;
++		while (index < block.length) {
++			index = skipCommentsAndStrings(block, index);
++			cleanBlock += block.charAt(index++);
++		}
++		return cleanBlock;
++	}
++	
++	/**
++	 * Returns proposals for variables and arguments within the current function scope.
++	 */
++	function getFunctionProposals(prefix, buffer, startOffset) {
++		var bufferPrefix = buffer.substring(0,startOffset);
++		var cleanBuffer = removeCommentsAndLiterals(bufferPrefix);
++		var removedChars = bufferPrefix.length-cleanBuffer.length;
++		return recursiveGetFunctionProposals(prefix, cleanBuffer, startOffset-removedChars);
++	}
++
++	/**
++	 * @name orion.editor.JavaScriptContentAssistProvider
++	 * @class Provides content assist for JavaScript keywords.
++	 */
++
++	function JavaScriptContentAssistProvider() {}
++
++	JavaScriptContentAssistProvider.prototype = /** @lends orion.editor.JavaScriptContentAssistProvider.prototype */
++	{
++		computeProposals: function(buffer, offset, context) {
++			var prefix = context.prefix;
++			var proposals = [];
++			if (offset > 0) {
++				//if the character preceding the prefix is a '.' character, then we are completing an object member
++				var precedingChar = buffer.charAt(offset - prefix.length - 1);
++				if (precedingChar === '.') {
++					return getMemberProposals(prefix, buffer, offset);
++				}
++			}
++			//we are not completing on an object member, so suggest templates and keywords
++			proposals = proposals.concat(getFunctionProposals(prefix, buffer, offset-prefix.length));
++			proposals = proposals.concat(getTemplateProposals(prefix, buffer, offset));
++			proposals = proposals.concat(getKeyWordProposals(prefix, buffer, offset));
++			return proposals;
++		}
++	};
++
++	return {
++		JavaScriptContentAssistProvider: JavaScriptContentAssistProvider
++	};
++});
+ }
+-window.knownOrionModules = ['examples/textview/textStyler', 'orion/textview/annotations', 'orion/textview/eventTarget', 'orion/editor/htmlGrammar', 'orion/editor/textMateStyler', 'orion/editor/regex', 'orion/textview/rulers', 'orion/textview/tooltip', 'orion/textview/textView', 'orion/textview/textModel', 'orion/textview/keyBinding', 'orion/textview/projectionTextModel', 'orion/textview/textDND', 'orion/textview/undoStack'];
++window.knownOrionModules = ['examples/textview/textStyler', 'orion/textview/annotations', 'orion/textview/eventTarget', 'orion/editor/htmlGrammar', 'orion/editor/textMateStyler', 'orion/editor/regex', 'orion/textview/rulers', 'orion/textview/tooltip', 'orion/textview/textView', 'orion/textview/textModel', 'orion/textview/keyBinding', 'orion/textview/projectionTextModel', 'orion/textview/textDND', 'orion/textview/undoStack', 'orion/editor/contentAssist', 'orion/editor/jsContentAssist'];
+diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
+--- a/browser/devtools/sourceeditor/source-editor-orion.jsm
++++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
+@@ -136,6 +136,11 @@ const DEFAULT_KEYBINDINGS = [
+     code: Ci.nsIDOMKeyEvent.DOM_VK_CLOSE_BRACKET,
+     accel: true,
+   },
++  {
++    action: "Autocompletion",
++    code: Ci.nsIDOMKeyEvent.DOM_VK_SPACE,
++    ctrl: true,
++  },
+ ];
+ 
+ if (Services.appinfo.OS == "WINNT" ||
+@@ -184,6 +189,7 @@ SourceEditor.prototype = {
+   _view: null,
+   _iframe: null,
+   _model: null,
++  _autocompletion: null,
+   _undoStack: null,
+   _linesRuler: null,
+   _annotationRuler: null,
+@@ -318,6 +324,8 @@ SourceEditor.prototype = {
+ 
+     let TextModel = window.require("orion/textview/textModel").TextModel;
+     let TextView = window.require("orion/textview/textView").TextView;
++    let ContentAssist = window.require("orion/editor/contentAssist")
++      .ContentAssist;
+ 
+     this._expandTab = config.expandTab;
+     this._tabSize = config.tabSize;
+@@ -333,6 +341,14 @@ SourceEditor.prototype = {
+       themeClass: "mozilla" + (config.readOnly ? " readonly" : ""),
+     });
+ 
++    // Setting autocompletion.
++    // TODO: using the correct autocompletion according to the type of content
++    // we're dealing with.
++    this._autocompletion = new ContentAssist(this._view);
++    this._autocompletion.setProviders([
++      window.require("orion/editor/jsContentAssist").JavaScriptContentAssistProvider,
++    ]);
++
+     if (config.highlightCurrentLine || Services.appinfo.OS == "Linux") {
+       this.addEventListener(SourceEditor.EVENTS.SELECTION,
+                             this._onOrionSelection);
+@@ -420,6 +436,7 @@ SourceEditor.prototype = {
+       "Comment/Uncomment": [this._doCommentUncomment, this],
+       "Move to Bracket Opening": [this._moveToBracketOpening, this],
+       "Move to Bracket Closing": [this._moveToBracketClosing, this],
++      "Autocompletion": [this._autocomplete, this],
+     };
+ 
+     for (let name in actions) {
+@@ -1326,6 +1343,17 @@ SourceEditor.prototype = {
+   },
+ 
+   /**
++   * Autocompletes whatever is being edited from the current position of the
++   * cursor.
++   *
++   * @private
++   */
++  _autocomplete: function SE__autocomplete() {
++    // TODO
++    this._autocompletion.activate();
++  },
++
++  /**
+    * Add an event listener to the editor. You can use one of the known events.
+    *
+    * @see SourceEditor.EVENTS
+@@ -2102,4 +2130,6 @@ function orion_i18nUtil()
+ 
+ define("i18n!orion/textview/nls/messages", [], orion_strings_proxy);
+ define("orion/textview/i18nUtil", [], orion_i18nUtil);
++// The following is used by the "orion/editor/contentAssist" module.
++define("i18n!orion/editor/nls/messages", [], orion_strings_proxy);
+ 
+diff --git a/browser/locales/en-US/chrome/browser/devtools/orion.properties b/browser/locales/en-US/chrome/browser/devtools/orion.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/orion.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/orion.properties
+@@ -13,4 +13,5 @@ matchingSearch=Matching Search
+ currentSearch=Current Search
+ currentLine=Current Line
+ matchingBracket=Matching Bracket
+-currentBracket=Current Bracket
+\ No newline at end of file
++currentBracket=Current Bracket
++contentAssist=Autocompletion

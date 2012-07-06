@@ -5211,3 +5211,97 @@ diff --git a/browser/themes/gnomestripe/devtools/orion.css b/browser/themes/gnom
 +  padding: 3px;
 +  white-space: nowrap;
 +}
+diff --git a/browser/themes/pinstripe/devtools/orion.css b/browser/themes/pinstripe/devtools/orion.css
+--- a/browser/themes/pinstripe/devtools/orion.css
++++ b/browser/themes/pinstripe/devtools/orion.css
+@@ -13,7 +13,7 @@ body {
+   font-size: inherit; /* inherit browser's default monospace font size */
+ }
+ 
+-.textviewContent {
++.textviewContent, .contentassist {
+   color: black; /* Default text color */
+   background: #f0f0ff; /* Background of the editor */
+   padding-left: 4px;
+@@ -182,7 +182,8 @@ body {
+ }
+ 
+ .line_caret,
+-.annotationLine.currentLine { /* Current line */
++.annotationLine.currentLine,
++.contentassist .selected { /* Current line */
+   background: #dae2ee; /* lighter than the background */
+ }
+ 
+@@ -217,3 +218,24 @@ body {
+   color: red;
+   font-weight: bold;
+ }
++
++.contentassist {
++  display: none;
++  padding: 1px;
++  position: fixed;
++  top: 100px;
++  left: 100px;
++  font-family: monospace;
++  box-shadow: 0px 0px 5px #af85ef;
++  border-radius: 4px;
++  z-index:10;
++  cursor: default;
++  overflow: auto;
++  height: 150px;
++  /* width: 200px;*/
++}
++
++.contentassist > div {
++  padding: 3px;
++  white-space: nowrap;
++}
+diff --git a/browser/themes/winstripe/devtools/orion.css b/browser/themes/winstripe/devtools/orion.css
+--- a/browser/themes/winstripe/devtools/orion.css
++++ b/browser/themes/winstripe/devtools/orion.css
+@@ -13,7 +13,7 @@ body {
+   font-size: inherit; /* inherit browser's default monospace font size */
+ }
+ 
+-.textviewContent {
++.textviewContent, .contentassist {
+   color: black; /* Default text color */
+   background: #f0f0ff; /* Background of the editor */
+   padding-left: 4px;
+@@ -182,7 +182,8 @@ body {
+ }
+ 
+ .line_caret,
+-.annotationLine.currentLine { /* Current line */
++.annotationLine.currentLine,
++.contentassist .selected { /* Current line */
+   background: #dae2ee; /* lighter than the background */
+ }
+ 
+@@ -217,3 +218,24 @@ body {
+   color: red;
+   font-weight: bold;
+ }
++
++.contentassist {
++  display: none;
++  padding: 1px;
++  position: fixed;
++  top: 100px;
++  left: 100px;
++  font-family: monospace;
++  box-shadow: 0px 0px 5px #af85ef;
++  border-radius: 4px;
++  z-index:10;
++  cursor: default;
++  overflow: auto;
++  height: 150px;
++  /* width: 200px;*/
++}
++
++.contentassist > div {
++  padding: 3px;
++  white-space: nowrap;
++}

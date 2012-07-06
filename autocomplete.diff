@@ -5046,7 +5046,7 @@ diff --git a/browser/devtools/sourceeditor/orion/orion.js b/browser/devtools/sou
 diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
 --- a/browser/devtools/sourceeditor/source-editor-orion.jsm
 +++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
-@@ -25,13 +25,36 @@ XPCOMUtils.defineLazyGetter(this, "orion
+@@ -25,13 +25,16 @@ XPCOMUtils.defineLazyGetter(this, "orion
  });
  
  const ORION_SCRIPT = "chrome://browser/content/orion.js";
@@ -5054,30 +5054,10 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +const ORION_IFRAME = "data:text/html,<!DOCTYPE html>" +
    "<html style='height:100%' dir='ltr'>" +
 -  "<head><meta charset='utf8'></head>" +
-+  //"<title></title>" +
-+  "<meta charset='utf-8'>" +
-+  //"<style>" +
-+  //".contentassist {" +
-+  //"  display: none;" +
-+  //"  background-color: #ffffff;" +
-+  //"  padding: 2px;" +
-+  //"  position: fixed;" +
-+  //"  top: 100px;" +
-+  //"  left: 100px;" +
-+  //"  border: 1px solid #cccccc;" +
-+  //"  z-index:10;" +
-+  //"  cursor: default;" +
-+  //"  overflow: auto;" +
-+  //"  height: 150px;" +
-+  //"  width: 200px;" +
-+  //"}" +
-+  //".contentassist .selected {" +
-+  //"  background-color: #dddddd;" +
-+  //"}" +
-+  //"</style>" +
++  "<head><meta charset='utf-8'></head>" +
    "<body style='height:100%;margin:0;overflow:hidden'>" +
    "<div id='editor' style='height:100%'></div>" +
-+  //"<div id='contentassist' class='contentassist'></div>" +
++  "<div id='contentassist' class='contentassist'></div>" +
    "</body></html>";
  
 +dump(ORION_IFRAME + '\n');
@@ -5085,7 +5065,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
  const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
  
  /**
-@@ -136,6 +159,11 @@ const DEFAULT_KEYBINDINGS = [
+@@ -136,6 +139,11 @@ const DEFAULT_KEYBINDINGS = [
      code: Ci.nsIDOMKeyEvent.DOM_VK_CLOSE_BRACKET,
      accel: true,
    },
@@ -5097,7 +5077,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
  ];
  
  if (Services.appinfo.OS == "WINNT" ||
-@@ -184,6 +212,9 @@ SourceEditor.prototype = {
+@@ -184,6 +192,9 @@ SourceEditor.prototype = {
    _view: null,
    _iframe: null,
    _model: null,
@@ -5107,7 +5087,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
    _undoStack: null,
    _linesRuler: null,
    _annotationRuler: null,
-@@ -420,6 +451,7 @@ SourceEditor.prototype = {
+@@ -420,6 +431,7 @@ SourceEditor.prototype = {
        "Comment/Uncomment": [this._doCommentUncomment, this],
        "Move to Bracket Opening": [this._moveToBracketOpening, this],
        "Move to Bracket Closing": [this._moveToBracketClosing, this],
@@ -5115,7 +5095,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      };
  
      for (let name in actions) {
-@@ -1327,6 +1359,17 @@ SourceEditor.prototype = {
+@@ -1327,6 +1339,17 @@ SourceEditor.prototype = {
    },
  
    /**
@@ -5133,7 +5113,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
     * Add an event listener to the editor. You can use one of the known events.
     *
     * @see SourceEditor.EVENTS
-@@ -1806,6 +1849,33 @@ SourceEditor.prototype = {
+@@ -1806,6 +1829,32 @@ SourceEditor.prototype = {
  
          this._styler = new TextStyler(this._view, aMode, this._annotationModel);
          this._styler.setFoldingEnabled(false);
@@ -5152,22 +5132,21 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +        this._autocompleteMode = new ContentAssistMode(this._autocompletion,
 +            this._autocompleteWidget);
 +
-+      case SourceEditor.MODES.JAVASCRIPT:
-+        let jsAutocomplete = window.require("orion/editor/jsContentAssist");
-+        this._autocompletion.setProviders([
-+          new jsAutocomplete.JavaScriptContentAssistProvider(),
-+        ]);
-+        break;
-+
-+      case SourceEditor.MODES.CSS:
-+        let cssAutocomplete = window.require("orion/editor/cssContentAssist");
-+        this._autocompletion.setProviders([
-+          new cssAutocomplete.CssContentAssistProvider(),
-+        ]);
++        if (aMode === SourceEditor.MODES.JAVASCRIPT) {
++          let jsAutocomplete = window.require("orion/editor/jsContentAssist");
++          this._autocompletion.setProviders([
++            new jsAutocomplete.JavaScriptContentAssistProvider(),
++          ]);
++        } else if (aMode === SourceEditor.MODES.CSS) {
++          let cssAutocomplete = window.require("orion/editor/cssContentAssist");
++          this._autocompletion.setProviders([
++            new cssAutocomplete.CssContentAssistProvider(),
++          ]);
++        }
          break;
  
        case SourceEditor.MODES.HTML:
-@@ -2103,4 +2173,6 @@ function orion_i18nUtil()
+@@ -2103,4 +2152,6 @@ function orion_i18nUtil()
  
  define("i18n!orion/textview/nls/messages", [], orion_strings_proxy);
  define("orion/textview/i18nUtil", [], orion_i18nUtil);
@@ -5185,3 +5164,50 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/orion.properties b/br
 \ No newline at end of file
 +currentBracket=Current Bracket
 +contentAssist=Autocompletion
+diff --git a/browser/themes/gnomestripe/devtools/orion.css b/browser/themes/gnomestripe/devtools/orion.css
+--- a/browser/themes/gnomestripe/devtools/orion.css
++++ b/browser/themes/gnomestripe/devtools/orion.css
+@@ -13,7 +13,7 @@ body {
+   font-size: inherit; /* inherit browser's default monospace font size */
+ }
+ 
+-.textviewContent {
++.textviewContent, .contentassist {
+   color: black; /* Default text color */
+   background: #f0f0ff; /* Background of the editor */
+   padding-left: 4px;
+@@ -182,7 +182,8 @@ body {
+ }
+ 
+ .line_caret,
+-.annotationLine.currentLine { /* Current line */
++.annotationLine.currentLine,
++.contentassist .selected { /* Current line */
+   background: #dae2ee; /* lighter than the background */
+ }
+ 
+@@ -217,3 +218,24 @@ body {
+   color: red;
+   font-weight: bold;
+ }
++
++.contentassist {
++  display: none;
++  padding: 1px;
++  position: fixed;
++  top: 100px;
++  left: 100px;
++  font-family: monospace;
++  box-shadow: 0px 0px 5px #af85ef;
++  border-radius: 4px;
++  z-index:10;
++  cursor: default;
++  overflow: auto;
++  height: 150px;
++  /* width: 200px;*/
++}
++
++.contentassist > div {
++  padding: 3px;
++  white-space: nowrap;
++}

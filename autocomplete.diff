@@ -1233,7 +1233,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
    },
  
    /**
-@@ -1324,6 +1336,18 @@ SourceEditor.prototype = {
+@@ -1324,6 +1336,17 @@ SourceEditor.prototype = {
    },
  
    /**
@@ -1244,7 +1244,6 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +   */
 +  _autocomplete: function SE__autocomplete() {
 +    // TODO
-+    dump('\nespadrine: Autocompleting!\n');
 +    this._autocompletion.computeProposals();
 +  },
 +
@@ -1252,7 +1251,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
     * Add an event listener to the editor. You can use one of the known events.
     *
     * @see SourceEditor.EVENTS
-@@ -1803,6 +1827,32 @@ SourceEditor.prototype = {
+@@ -1803,6 +1826,32 @@ SourceEditor.prototype = {
  
          this._styler = new TextStyler(this._view, aMode, this._annotationModel);
          this._styler.setFoldingEnabled(false);
@@ -1285,15 +1284,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
          break;
  
        case SourceEditor.MODES.HTML:
-@@ -2077,6 +2127,7 @@ function unregisterModules(aModules) {
- function orion_strings_proxy() {
-   return Proxy.create({
-     get: function(aReceiver, aName) {
-+      dump('\nespadrine getString ' + aName + '\n')
-       return orion_strings.GetStringFromName(aName);
-     }
-   });
-@@ -2101,4 +2152,6 @@ function orion_i18nUtil()
+@@ -2101,4 +2150,6 @@ function orion_i18nUtil()
  
  define("i18n!orion/textview/nls/messages", [], orion_strings_proxy);
  define("orion/textview/i18nUtil", [], orion_i18nUtil);

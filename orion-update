@@ -194,7 +194,7 @@ diff --git a/browser/devtools/sourceeditor/orion/README b/browser/devtools/sourc
 -Orion version: git clone from 2012-01-26
 -               commit hash 1d1150131dacecc9f4d9eb3cdda9103ea1819045
 +Orion version: git clone from 2012-05-28
-+               commit hash cb8fd48b9fa6a8e701df44a625e720e7174920d2
++               commit hash cafca7acd3433d6c106ea052ec3a17fe60644993
  
    + patch for Eclipse Bug 370584 - [Firefox] Edit menu items in context menus
      http://git.eclipse.org/c/orion/org.eclipse.orion.client.git/commit/?id=137d5a8e9bbc0fa204caae74ebd25a7d9d4729bd

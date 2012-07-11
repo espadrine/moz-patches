@@ -187,17 +187,32 @@ diff --git a/browser/devtools/sourceeditor/orion/Makefile.dryice.js b/browser/de
 diff --git a/browser/devtools/sourceeditor/orion/README b/browser/devtools/sourceeditor/orion/README
 --- a/browser/devtools/sourceeditor/orion/README
 +++ b/browser/devtools/sourceeditor/orion/README
-@@ -8,8 +8,8 @@ The Orion editor web site: http://www.ec
+@@ -8,23 +8,8 @@ The Orion editor web site: http://www.ec
  
  To upgrade Orion to a newer version see the UPGRADE file.
  
 -Orion version: git clone from 2012-01-26
 -               commit hash 1d1150131dacecc9f4d9eb3cdda9103ea1819045
-+Orion version: git clone from 2012-05-28
+-
+-  + patch for Eclipse Bug 370584 - [Firefox] Edit menu items in context menus
+-    http://git.eclipse.org/c/orion/org.eclipse.orion.client.git/commit/?id=137d5a8e9bbc0fa204caae74ebd25a7d9d4729bd
+-    see https://bugs.eclipse.org/bugs/show_bug.cgi?id=370584
+-
+-  + patches for Eclipse Bug 370606 - Problems with UndoStack and deletions at
+-                                     the beginning of the document
+-    http://git.eclipse.org/c/orion/org.eclipse.orion.client.git/commit/?id=cec71bddaf32251c34d3728df5da13c130d14f33
+-    http://git.eclipse.org/c/orion/org.eclipse.orion.client.git/commit/?id=3ce24b94f1d8103b16b9cf16f2f50a6302d43b18
+-    http://git.eclipse.org/c/orion/org.eclipse.orion.client.git/commit/?id=27177e9a3dc70c20b4877e3eab3adfff1d56e342
+-    see https://bugs.eclipse.org/bugs/show_bug.cgi?id=370606
+-
+-  + patch for Mozilla Bug 730532 - remove CSS2Properties aliases for MozOpacity
+-                                   and MozOutline*
+-    see https://bugzilla.mozilla.org/show_bug.cgi?id=730532#c3
++Orion version: git clone from 2012-07-05
 +               commit hash cafca7acd3433d6c106ea052ec3a17fe60644993
  
-   + patch for Eclipse Bug 370584 - [Firefox] Edit menu items in context menus
-     http://git.eclipse.org/c/orion/org.eclipse.orion.client.git/commit/?id=137d5a8e9bbc0fa204caae74ebd25a7d9d4729bd
+ # License
+ 
 diff --git a/browser/devtools/sourceeditor/orion/UPGRADE b/browser/devtools/sourceeditor/orion/UPGRADE
 --- a/browser/devtools/sourceeditor/orion/UPGRADE
 +++ b/browser/devtools/sourceeditor/orion/UPGRADE
@@ -224,16 +239,17 @@ diff --git a/browser/devtools/sourceeditor/orion/UPGRADE b/browser/devtools/sour
  
 -5. Copy the two files back here.
 +    npm install git://github.com/mozilla/dryice
-+
+ 
+-6. Make a new build of Firefox.
 +4. Execute Makefile.dryice.js.
-+
+ 
 +    FIREFOX_HOME=<path-to-firefox> ORION_CLIENT_HOME=..  ./Makefile.dryice.js
 +
 +The orion.js files that you have in the orion/ directory in the firefox tree
 +have now been substituted to a new version.
- 
- 6. Make a new build of Firefox.
- 
++
++5. Make a new build of Firefox.
++
 diff --git a/browser/devtools/sourceeditor/orion/orion.css b/browser/devtools/sourceeditor/orion/orion.css
 --- a/browser/devtools/sourceeditor/orion/orion.css
 +++ b/browser/devtools/sourceeditor/orion/orion.css

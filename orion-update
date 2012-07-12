@@ -22397,7 +22397,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
    },
  
    /**
-@@ -769,6 +809,7 @@ SourceEditor.prototype = {
+@@ -769,46 +809,45 @@ SourceEditor.prototype = {
  
    /**
     * Highlight the current line using the Orion annotation model.
@@ -22405,13 +22405,14 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
     *
     * @private
     * @param object aEvent
-@@ -776,39 +817,31 @@ SourceEditor.prototype = {
+    *        The Selection event object.
     */
-   _highlightCurrentLine: function SE__highlightCurrentLine(aEvent)
-   {
+-  _highlightCurrentLine: function SE__highlightCurrentLine(aEvent)
+-  {
 -    let annotationModel = this._annotationModel;
 -    let model = this._model;
 -    let oldAnnotation = this._currentLineAnnotation;
++  _highlightCurrentLine: function SE__highlightCurrentLine(aEvent) {
      let newSelection = aEvent.newValue;
 +    let oldSelection = aEvent.oldValue;
 +    let type = this._annotationType.ANNOTATION_CURRENT_LINE;
@@ -22421,18 +22422,24 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 -      if (oldAnnotation) {
 -        annotationModel.removeAnnotation(oldAnnotation);
 -        this._currentLineAnnotation = null;
--      }
--      return;
 +    // Gather information about the new line.
 +    let lineIndex = this._model.getLineAtOffset(newSelection.start);
 +    let start = this._model.getLineStart(lineIndex);
 +    let end = this._model.getLineEnd(lineIndex);
 +
++    // Gather information about the old line.
++    let oldLineIndex = this._model.getLineAtOffset(oldSelection.start);
++    let oldStart = this._model.getLineStart(oldLineIndex);
++    let oldEnd = this._model.getLineEnd(oldLineIndex);
++
 +    // Construct the line whose highlighting we must remove.
 +    let remove = null;
 +    if (this._currentLineAnnotation) {
-+      this._currentLineAnnotation.start = oldSelection.start;
-+      this._currentLineAnnotation.end = oldSelection.end;
++      if (oldStart === oldEnd) {
++        this._currentLineAnnotation.start = oldStart;
++        this._currentLineAnnotation.end = oldEnd;
+       }
+-      return;
 +      remove = [this._currentLineAnnotation];
      }
  
@@ -22466,7 +22473,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
    },
  
    /**
-@@ -2022,6 +2055,7 @@ SourceEditor.prototype = {
+@@ -2022,6 +2061,7 @@ SourceEditor.prototype = {
      this._dragAndDrop = null;
      this._annotationModel = null;
      this._annotationStyler = null;
@@ -22474,7 +22481,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      this._currentLineAnnotation = null;
      this._eventTarget = null;
      this._eventListenersQueue = null;
-@@ -2031,3 +2065,40 @@ SourceEditor.prototype = {
+@@ -2031,3 +2071,40 @@ SourceEditor.prototype = {
      this._lastFind = null;
    },
  };

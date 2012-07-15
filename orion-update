@@ -22559,6 +22559,24 @@ diff --git a/browser/devtools/sourceeditor/source-editor-ui.jsm b/browser/devtoo
          let controller = window.controllers.getControllerForCommand("cmd_paste");
          result = !this._editor.readOnly &&
                   controller.isCommandEnabled("cmd_paste");
+diff --git a/browser/devtools/sourceeditor/source-editor.jsm b/browser/devtools/sourceeditor/source-editor.jsm
+--- a/browser/devtools/sourceeditor/source-editor.jsm
++++ b/browser/devtools/sourceeditor/source-editor.jsm
+@@ -121,6 +121,14 @@ SourceEditor.DEFAULTS = {
+   expandTab: true,
+ 
+   /**
++   * Tells whether the tab key is consumed by the editor or not.
++   * If not, then the tab key is allowed to do the default browser action,
++   * focus traversal.
++   * @type boolean
++   */
++  tabMode: true,
++
++  /**
+    * Tells if you want the editor to be read only or not.
+    * @type boolean
+    */
 diff --git a/browser/locales/en-US/chrome/browser/devtools/orion.properties b/browser/locales/en-US/chrome/browser/devtools/orion.properties
 new file mode 100644
 --- /dev/null

@@ -22493,7 +22493,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 + * Remove all require.js modules located in an object.
 + * Relevant: window.knownOrionModules, which can be passed to this function.
 + * @param object aModules
-+ *        map from "define" module names to the corresponding modules.
++ *        Map from "define" module names to the corresponding modules.
 + */
 +function unregisterModules(aModules) {
 +  aModules.forEach(function(aModuleName) {
@@ -22562,13 +22562,14 @@ diff --git a/browser/devtools/sourceeditor/source-editor-ui.jsm b/browser/devtoo
 diff --git a/browser/devtools/sourceeditor/source-editor.jsm b/browser/devtools/sourceeditor/source-editor.jsm
 --- a/browser/devtools/sourceeditor/source-editor.jsm
 +++ b/browser/devtools/sourceeditor/source-editor.jsm
-@@ -121,6 +121,14 @@ SourceEditor.DEFAULTS = {
+@@ -121,6 +121,15 @@ SourceEditor.DEFAULTS = {
    expandTab: true,
  
    /**
 +   * Tells whether the tab key is consumed by the editor or not.
 +   * If not, then the tab key is allowed to do the default browser action,
 +   * focus traversal.
++   * This defaults to true if readOnly is false, and false if readOnly is true.
 +   * @type boolean
 +   */
 +  tabMode: true,

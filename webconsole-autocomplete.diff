@@ -1,0 +1,50 @@
+# HG changeset patch
+# Parent cb7d40a84ae3654f549c7b44faa70af89673cc02
+# User Thaddee Tyl <thaddee.tyl@gmail.com>
+
+diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
+--- a/browser/devtools/webconsole/WebConsoleUtils.jsm
++++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
+@@ -897,7 +897,7 @@ function JSPropertyProvider(aScope, aInp
+ 
+       // If obj is undefined or null, then there is no chance to run completion
+       // on it. Exit here.
+-      if (typeof obj === "undefined" || obj === null) {
++      if (obj == null) {
+         return null;
+       }
+ 
+@@ -920,7 +920,7 @@ function JSPropertyProvider(aScope, aInp
+ 
+   // If obj is undefined or null, then there is no chance to run
+   // completion on it. Exit here.
+-  if (typeof obj === "undefined" || obj === null) {
++  if (obj == null) {
+     return null;
+   }
+ 
+@@ -929,8 +929,23 @@ function JSPropertyProvider(aScope, aInp
+     return null;
+   }
+ 
++  // Array of strings of all properties on this object.
++  function getScope(obj) {
++    let names = Object.getOwnPropertyNames(obj);
++    let parent;
++    if ((parent = Object.getPrototypeOf(obj)) !== null) {
++      let superNames = getScope(parent);
++      for (let i = 0; i < superNames; i++) {
++        names.push(superNames[i]);
++      }
++    }
++    return names;
++  }
++
+   let matches = [];
+-  for (let prop in obj) {
++  let names = getScope(obj);
++  for (let i = 0; i < names.length; i++) {
++    let prop = names[i];
+     if (prop.indexOf(matchProp) == 0) {
+       matches.push(prop);
+     }

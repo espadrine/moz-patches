@@ -24,18 +24,25 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
      return null;
    }
  
-@@ -929,8 +929,23 @@ function JSPropertyProvider(aScope, aInp
+@@ -929,8 +929,30 @@ function JSPropertyProvider(aScope, aInp
      return null;
    }
  
 +  // Array of strings of all properties on this object.
 +  function getScope(obj) {
 +    let names = Object.getOwnPropertyNames(obj);
-+    let parent;
-+    if ((parent = Object.getPrototypeOf(obj)) !== null) {
-+      let superNames = getScope(parent);
-+      for (let i = 0; i < superNames; i++) {
-+        names.push(superNames[i]);
++    obj = Object.getPrototypeOf(obj);
++    if (obj !== null) {
++      names.concat(getScope(obj));
++    }
++    return names;
++  }
++
++  function getRealScope(obj) {
++    let names = getScope(obj);
++    for (var prop in obj) {
++      if (names.indexOf(prop) === -1) {
++        names.push(prop);
 +      }
 +    }
 +    return names;
@@ -43,7 +50,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 +
    let matches = [];
 -  for (let prop in obj) {
-+  let names = getScope(obj);
++  let names = getRealScope(obj);
 +  for (let i = 0; i < names.length; i++) {
 +    let prop = names[i];
      if (prop.indexOf(matchProp) == 0) {

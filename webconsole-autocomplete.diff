@@ -6,20 +6,28 @@ Better autocompletion in the Web Console
 diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
 --- a/browser/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
-@@ -897,7 +897,7 @@ function JSPropertyProvider(aScope, aInp
+@@ -895,9 +895,9 @@ function JSPropertyProvider(aScope, aInp
+         return null;
+       }
  
-       // If obj is undefined or null, then there is no chance to run completion
-       // on it. Exit here.
+-      // If obj is undefined or null, then there is no chance to run completion
+-      // on it. Exit here.
 -      if (typeof obj === "undefined" || obj === null) {
++      // If obj is undefined or null (which is what "== null" does),
++      // then there is no chance to run completion on it. Exit here.
 +      if (obj == null) {
          return null;
        }
  
-@@ -920,7 +920,7 @@ function JSPropertyProvider(aScope, aInp
+@@ -918,9 +918,9 @@ function JSPropertyProvider(aScope, aInp
+     matchProp = properties[0].trimLeft();
+   }
  
-   // If obj is undefined or null, then there is no chance to run
-   // completion on it. Exit here.
+-  // If obj is undefined or null, then there is no chance to run
+-  // completion on it. Exit here.
 -  if (typeof obj === "undefined" || obj === null) {
++  // If obj is undefined or null (which is what "== null" does),
++  // then there is no chance to run completion on it. Exit here.
 +  if (obj == null) {
      return null;
    }
@@ -41,7 +49,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 +  function getRealScope(obj) {
 +    let names = getScope(obj);
 +    for (let prop in obj) {
-+      if (names.indexOf(prop) === -1) {
++      if (names.indexOf(prop) == -1) {
 +        names.push(prop);
 +      }
 +    }
@@ -56,3 +64,21 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
      if (prop.indexOf(matchProp) == 0) {
        matches.push(prop);
      }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_completion.js b/browser/devtools/webconsole/test/browser_webconsole_completion.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_completion.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_completion.js
+@@ -50,6 +50,14 @@ function testCompletion(hud) {
+   is(input.selectionEnd, 8, "end selection is alright");
+   is(jsterm.completeNode.value.replace(/ /g, ""), "", "'docu' completed");
+ 
++  // Test typing 'window.O' and press tab.
++  input.value = "window.O";
++  input.setSelectionRange(8, 8);
++  jsterm.complete(jsterm.COMPLETE_FORWARD, testNext);
++  yield;
++
++  is(input.value, "window.Object", "'window.O' tab completion");
++
+   // Test typing 'document.getElem'.
+   input.value = "document.getElem";
+   input.setSelectionRange(16, 16);

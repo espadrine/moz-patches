@@ -40,7 +40,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 +
 +  function getRealScope(obj) {
 +    let names = getScope(obj);
-+    for (var prop in obj) {
++    for (let prop in obj) {
 +      if (names.indexOf(prop) === -1) {
 +        names.push(prop);
 +      }

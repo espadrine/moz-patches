@@ -1,11 +1,20 @@
 # HG changeset patch
 # Parent cb7d40a84ae3654f549c7b44faa70af89673cc02
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
-Better autocompletion in the Web Console
+Bug 775812 - Better autocompletion in the Web Console
 
 diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
 --- a/browser/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
+@@ -538,7 +538,7 @@ var WebConsoleUtils = {
+           value = aObject[propName];
+           presentable = this.presentableValueFor(value);
+         }
+-	      catch (ex) {
++        catch (ex) {
+           continue;
+         }
+       }
 @@ -895,9 +895,9 @@ function JSPropertyProvider(aScope, aInp
          return null;
        }
@@ -32,33 +41,82 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
      return null;
    }
  
-@@ -929,8 +929,25 @@ function JSPropertyProvider(aScope, aInp
+@@ -929,12 +929,9 @@ function JSPropertyProvider(aScope, aInp
      return null;
    }
  
-+  // Array of strings of all properties on this object.
-+  function getScope(obj) {
-+    let names = {};
-+    let ownNames = Object.getOwnPropertyNames(obj);
-+    for (let i = 0; i < ownNames.length; i++) {
-+      names[ownNames[i]] = 1;
-+    }
-+    obj = Object.getPrototypeOf(obj);
-+    if (obj !== null) {
-+      let parentScope = getScope(obj);
-+      for (let name in parentScope) {
-+        names[name] = 1;
+-  let matches = [];
+-  for (let prop in obj) {
+-    if (prop.indexOf(matchProp) == 0) {
+-      matches.push(prop);
+-    }
+-  }
++  const MAX_COMPLETIONS = 256;
++
++  let matches = Object.keys(getMatchedProps(obj, matchProp, MAX_COMPLETIONS));
+ 
+   return {
+     matchProp: matchProp,
+@@ -942,5 +939,59 @@ function JSPropertyProvider(aScope, aInp
+   };
+ }
+ 
++/**
++ * Get all accessible properties on this object.
++ * Filter those properties by name.
++ * Take only a certain number of those.
++ *
++ * @param object obj
++ *        Object whose properties we want to collect.
++ *
++ * @param string matchProp
++ *        Filter for properties that match this one.
++ *        Defaults to the empty string (which always matches).
++ *
++ * @param number max
++ *        Maximum number of properties we want.
++ *        Defaults to infinity.
++ *
++ * @return object
++ *         Object whose keys are all accessible properties on the object.
++ */
++function getMatchedProps(obj, matchProp = '', max = Infinity)
++{
++  let c = max;
++  let names = {};   // Using an Object to avoid duplicates.
++  let ownNames = Object.getOwnPropertyNames(obj);
++  for (let i = 0; i < ownNames.length; i++) {
++    if (ownNames[i].indexOf(matchProp) == 0) {
++      if (names[ownNames[i]] != true) {
++        c--;
++        if (c < 0) {
++          return names;
++        }
++        names[ownNames[i]] = true;
 +      }
 +    }
-+    return names;
 +  }
 +
-   let matches = [];
--  for (let prop in obj) {
-+  for (let prop in getScope(obj)) {
-     if (prop.indexOf(matchProp) == 0) {
-       matches.push(prop);
-     }
++  // We need to recursively go up the prototype chain.
++  obj = Object.getPrototypeOf(obj);
++  if (obj !== null) {
++    let parentScope = getMatchedProps(obj, matchProp, max);
++    for (let name in parentScope) {
++      if (names[name] != true) {
++        c--;
++        if (c < 0) {
++          return names;
++        }
++        names[name] = true;
++      }
++    }
++  }
++  return names;
++}
++
++
+ return JSPropertyProvider;
+ })(WebConsoleUtils);
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js b/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
@@ -212,8 +270,8 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_docu
  
 +    // |props| values, and the following properties:
 +    // __defineGetter__  __defineSetter__ __lookupGetter__ __lookupSetter__
-+    // hasOwnProperty isPrototypeOf propertyIsEnumerable toLocaleString toString
-+    // toSource unwatch valueOf watch constructor.
++    // constructor hasOwnProperty isPrototypeOf propertyIsEnumerable
++    // toLocaleString toSource toString unwatch valueOf watch.
      let props = WCU.namesAndValuesOf(content.wrappedJSObject.document.body);
 -    is(popup.itemCount, props.length, "popup.itemCount is correct");
 +    is(popup.itemCount, 14 + props.length, "popup.itemCount is correct");

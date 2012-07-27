@@ -1,0 +1,17 @@
+# HG changeset patch
+# Parent d880221c9687c4da26f57670cb7a6f0e03af73d9
+# User Thaddee Tyl <thaddee.tyl@gmail.com>
+try: -b do -p all -u mochitests -t none
+
+diff --git a/browser/devtools/sourceeditor/orion/orion.js b/browser/devtools/sourceeditor/orion/orion.js
+--- a/browser/devtools/sourceeditor/orion/orion.js
++++ b/browser/devtools/sourceeditor/orion/orion.js
+@@ -153,7 +153,7 @@ define("orion/textview/eventTarget", [],
+ 							if (listeners[i]) {
+ 								var l = listeners[i].listener;
+ 								if (typeof l === "function") {
+-									l.call(this, evt);
++									l.call(this, evt);///
+ 								} else if (l.handleEvent && typeof l.handleEvent === "function") {
+ 									l.handleEvent(evt);
+ 								}

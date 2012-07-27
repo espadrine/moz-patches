@@ -15,7 +15,16 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
            continue;
          }
        }
-@@ -895,9 +895,9 @@ function JSPropertyProvider(aScope, aInp
+@@ -735,6 +735,8 @@ const OPEN_CLOSE_BODY = {
+   "(": ")",
+ };
+ 
++const MAX_COMPLETIONS = 256;
++
+ /**
+  * Analyses a given string to find the last statement that is interesting for
+  * later completion.
+@@ -895,9 +897,9 @@ function JSPropertyProvider(aScope, aInp
          return null;
        }
  
@@ -28,7 +37,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
          return null;
        }
  
-@@ -918,9 +918,9 @@ function JSPropertyProvider(aScope, aInp
+@@ -918,9 +920,9 @@ function JSPropertyProvider(aScope, aInp
      matchProp = properties[0].trimLeft();
    }
  
@@ -41,7 +50,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
      return null;
    }
  
-@@ -929,12 +929,9 @@ function JSPropertyProvider(aScope, aInp
+@@ -929,12 +931,7 @@ function JSPropertyProvider(aScope, aInp
      return null;
    }
  
@@ -51,13 +60,11 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 -      matches.push(prop);
 -    }
 -  }
-+  const MAX_COMPLETIONS = 256;
-+
-+  let matches = Object.keys(getMatchedProps(obj, matchProp, MAX_COMPLETIONS));
++  let matches = Object.keys(getMatchedProps(obj, matchProp));
  
    return {
      matchProp: matchProp,
-@@ -942,5 +939,59 @@ function JSPropertyProvider(aScope, aInp
+@@ -942,5 +939,55 @@ function JSPropertyProvider(aScope, aInp
    };
  }
  
@@ -73,20 +80,16 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 + *        Filter for properties that match this one.
 + *        Defaults to the empty string (which always matches).
 + *
-+ * @param number max
-+ *        Maximum number of properties we want.
-+ *        Defaults to infinity.
-+ *
 + * @return object
 + *         Object whose keys are all accessible properties on the object.
 + */
-+function getMatchedProps(obj, matchProp = '', max = Infinity)
++function getMatchedProps(aObj, aMatchProp = "")
 +{
-+  let c = max;
++  let c = MAX_COMPLETIONS;
 +  let names = {};   // Using an Object to avoid duplicates.
-+  let ownNames = Object.getOwnPropertyNames(obj);
++  let ownNames = Object.getOwnPropertyNames(aObj);
 +  for (let i = 0; i < ownNames.length; i++) {
-+    if (ownNames[i].indexOf(matchProp) == 0) {
++    if (ownNames[i].indexOf(aMatchProp) == 0) {
 +      if (names[ownNames[i]] != true) {
 +        c--;
 +        if (c < 0) {
@@ -98,9 +101,9 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 +  }
 +
 +  // We need to recursively go up the prototype chain.
-+  obj = Object.getPrototypeOf(obj);
-+  if (obj !== null) {
-+    let parentScope = getMatchedProps(obj, matchProp, max);
++  aObj = Object.getPrototypeOf(aObj);
++  if (aObj !== null) {
++    let parentScope = getMatchedProps(aObj, aMatchProp);
 +    for (let name in parentScope) {
 +      if (names[name] != true) {
 +        c--;
@@ -138,24 +141,24 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_auto
 +    let sameItems = popup.getItems().map(function(e) {return e.label;});
 +    ok(sameItems.every(function(prop, index) {
 +      return [
-+        '__defineGetter__',
-+        '__defineSetter__',
-+        '__lookupGetter__',
-+        '__lookupSetter__',
-+        'constructor',
-+        'hasOwnProperty',
-+        'isPrototypeOf',
-+        'item0',
-+        'item1',
-+        'item2',
-+        'item3',
-+        'propertyIsEnumerable',
-+        'toLocaleString',
-+        'toSource',
-+        'toString',
-+        'unwatch',
-+        'valueOf',
-+        'watch',
++        "__defineGetter__",
++        "__defineSetter__",
++        "__lookupGetter__",
++        "__lookupSetter__",
++        "constructor",
++        "hasOwnProperty",
++        "isPrototypeOf",
++        "item0",
++        "item1",
++        "item2",
++        "item3",
++        "propertyIsEnumerable",
++        "toLocaleString",
++        "toSource",
++        "toString",
++        "unwatch",
++        "valueOf",
++        "watch",
 +      ][index] === prop}), "getItems returns the items we expect");
  
      is(popup.selectedIndex, -1, "no index is selected");

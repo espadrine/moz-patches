@@ -3,8 +3,8 @@
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
 # Date 1339175186 -10800
 # Node ID ae8cb025164462d3b39784655fa082ad974fb38c
-# Parent cb7d40a84ae3654f549c7b44faa70af89673cc02
-Bug 759351 - Update Orion from upstream
+# Parent 714dc3ce21269be7fbba153a3a15d8235906ba71
+try: -b o -p linux,linux64,macosx64,win32 -u mochitests -t none
 
 diff --git a/browser/devtools/sourceeditor/orion/Makefile.dryice.js b/browser/devtools/sourceeditor/orion/Makefile.dryice.js
 --- a/browser/devtools/sourceeditor/orion/Makefile.dryice.js
@@ -22614,7 +22614,7 @@ diff --git a/browser/locales/jar.mn b/browser/locales/jar.mn
 diff --git a/browser/themes/gnomestripe/devtools/orion.css b/browser/themes/gnomestripe/devtools/orion.css
 --- a/browser/themes/gnomestripe/devtools/orion.css
 +++ b/browser/themes/gnomestripe/devtools/orion.css
-@@ -2,13 +2,18 @@
+@@ -2,19 +2,24 @@
   * License, v. 2.0. If a copy of the MPL was not distributed with this file,
   * You can obtain one at http://mozilla.org/MPL/2.0/. */
  
@@ -22635,6 +22635,13 @@ diff --git a/browser/themes/gnomestripe/devtools/orion.css b/browser/themes/gnom
    color: black; /* Default text color */
    background: #f0f0ff; /* Background of the editor */
    padding-left: 4px;
+ }
+ 
+-.readonly > .view {
++.readonly .textviewContainer {
+   background: #f0f0ff;
+ }
+ 
 @@ -45,6 +50,25 @@
    text-align: start;
  }
@@ -22675,7 +22682,7 @@ diff --git a/browser/themes/gnomestripe/devtools/orion.css b/browser/themes/gnom
 diff --git a/browser/themes/pinstripe/devtools/orion.css b/browser/themes/pinstripe/devtools/orion.css
 --- a/browser/themes/pinstripe/devtools/orion.css
 +++ b/browser/themes/pinstripe/devtools/orion.css
-@@ -2,13 +2,18 @@
+@@ -2,19 +2,24 @@
   * License, v. 2.0. If a copy of the MPL was not distributed with this file,
   * You can obtain one at http://mozilla.org/MPL/2.0/. */
  
@@ -22696,6 +22703,13 @@ diff --git a/browser/themes/pinstripe/devtools/orion.css b/browser/themes/pinstr
    color: black; /* Default text color */
    background: #f0f0ff; /* Background of the editor */
    padding-left: 4px;
+ }
+ 
+-.readonly > .view {
++.readonly .textviewContainer {
+   background: #f0f0ff;
+ }
+ 
 @@ -45,6 +50,25 @@
    text-align: start;
  }
@@ -22736,7 +22750,7 @@ diff --git a/browser/themes/pinstripe/devtools/orion.css b/browser/themes/pinstr
 diff --git a/browser/themes/winstripe/devtools/orion.css b/browser/themes/winstripe/devtools/orion.css
 --- a/browser/themes/winstripe/devtools/orion.css
 +++ b/browser/themes/winstripe/devtools/orion.css
-@@ -2,13 +2,18 @@
+@@ -2,19 +2,24 @@
   * License, v. 2.0. If a copy of the MPL was not distributed with this file,
   * You can obtain one at http://mozilla.org/MPL/2.0/. */
  
@@ -22757,6 +22771,13 @@ diff --git a/browser/themes/winstripe/devtools/orion.css b/browser/themes/winstr
    color: black; /* Default text color */
    background: #f0f0ff; /* Background of the editor */
    padding-left: 4px;
+ }
+ 
+-.readonly > .view {
++.readonly .textviewContainer {
+   background: #f0f0ff;
+ }
+ 
 @@ -45,6 +50,25 @@
    text-align: start;
  }

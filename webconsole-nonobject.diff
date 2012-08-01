@@ -22,12 +22,14 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
   *
   * @param string matchProp
   *        Filter for properties that match this one.
-@@ -956,6 +956,10 @@ function JSPropertyProvider(aScope, aInp
+@@ -956,6 +956,12 @@ function JSPropertyProvider(aScope, aInp
   */
  function getMatchedProps(aObj, aMatchProp = "")
  {
 +  if (aObj == null) { return {}; }
-+  if (typeof aObj != "object") {
++  try {
++    Object.getPrototypeOf(aObj);
++  } catch(e) {
 +    aObj = aObj.constructor.prototype;
 +  }
    let c = MAX_COMPLETIONS;

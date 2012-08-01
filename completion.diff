@@ -1,6 +1,7 @@
 # HG changeset patch
-# Parent 221ab03716db6537605fe30aa0bfcfdbf9b2a1d8
+# Parent 9b3e2eab2ba6e5c37f1218da4d3c14d1866dbc36
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
+Bug 762164 — Implement Autocompletion in the Source Editor
 
 diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratchpad/scratchpad.js
 --- a/browser/devtools/scratchpad/scratchpad.js

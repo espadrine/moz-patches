@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 9b3e2eab2ba6e5c37f1218da4d3c14d1866dbc36
+# Parent 70feaa326dc77f88dcb12c4ee90e82cafdefce6f
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
 Bug 762164 — Implement Autocompletion in the Source Editor
 
@@ -27,7 +27,7 @@ diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratc
     * Execute the selected text (if any) or the entire editor content in the
     * current context.
     * @return mixed
-@@ -981,11 +995,13 @@ var Scratchpad = {
+@@ -981,16 +995,21 @@ var Scratchpad = {
  
      this.editor = new SourceEditor();
  
@@ -41,10 +41,18 @@ diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratc
      };
  
      let editorPlaceholder = document.getElementById("scratchpad-editor");
+     this.editor.init(editorPlaceholder, config,
+                      this._onEditorLoad.bind(this, state));
++
++    // Evaluate the sandbox one to get all the autocompletion we can.
++    this.evalForContext("");
+   },
+ 
+   /**
 diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
 --- a/browser/devtools/sourceeditor/source-editor-orion.jsm
 +++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
-@@ -25,6 +25,375 @@ const ORION_IFRAME = "data:text/html;cha
+@@ -25,6 +25,379 @@ const ORION_IFRAME = "data:text/html;cha
    "<div id='editor' style='height:100%'></div>" +
    "</body></html>";
  
@@ -293,7 +301,11 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +
 +    // The following line may be computationally intensive.
 +    this._completion = this.computeCompletion();
-+    this._index = 0;
++    this._index = 0;  // We can start on the first entry.
++    if (count < 0) {
++      // We can also start at the end.
++      this._index = this._completion.candidates.length - 1;
++    }
 +    if (this._completion.candidates.length > 0) {
 +      // If there is a choice to make, show the choice.
 +      if (this._completion.candidates.length > 1) {
@@ -420,7 +432,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
  const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
  
  /**
-@@ -191,6 +560,9 @@ SourceEditor.prototype = {
+@@ -191,6 +564,9 @@ SourceEditor.prototype = {
    _contextMenu: null,
    _dirty: false,
  
@@ -430,7 +442,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
    /**
     * The Source Editor user interface manager.
     * @type object
-@@ -247,6 +619,8 @@ SourceEditor.prototype = {
+@@ -247,6 +623,8 @@ SourceEditor.prototype = {
                            SourceEditor.DEFAULTS[key];
      }
  
@@ -439,7 +451,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      // TODO: Bug 725677 - Remove the deprecated placeholderText option from the
      // Source Editor initialization.
      if (aConfig.placeholderText) {
-@@ -363,6 +737,12 @@ SourceEditor.prototype = {
+@@ -363,6 +741,12 @@ SourceEditor.prototype = {
  
      this.setMode(config.mode);
  
@@ -452,7 +464,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      this._undoStack = new UndoStack(this._view, config.undoLimit);
  
      this._dragAndDrop = new TextDND(this._view, this._undoStack);
-@@ -460,7 +840,8 @@ SourceEditor.prototype = {
+@@ -460,7 +844,8 @@ SourceEditor.prototype = {
  
    /**
     * The "tab" editor action implementation. This adds support for expanded tabs
@@ -462,7 +474,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
     * @private
     */
    _doTab: function SE__doTab()
-@@ -509,6 +890,15 @@ SourceEditor.prototype = {
+@@ -509,6 +894,15 @@ SourceEditor.prototype = {
        return true;
      }
  
@@ -478,20 +490,24 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      return false;
    },
  
-@@ -523,6 +913,12 @@ SourceEditor.prototype = {
-       return true;
+@@ -536,6 +930,16 @@ SourceEditor.prototype = {
+       indent = (new Array(this._tabSize + 1)).join(" ");
      }
  
-+    // If we were autocompleting, use that.
-+    if (this._autocomplete && this._autocomplete._on) {
++    // Do autocompletion.
++    let previousChar = this.getText()[this.getCaretOffset() - 1];
++    if (this._autocomplete && selection.start == selection.end
++        && /^[a-zA-Z0-9.$_]$/.test(previousChar)) {
++      // We have the right to autocomplete now.
 +      this._autocomplete.cycle(-1);
 +      return true;
 +    }
 +
-     let indent = "\t";
- 
-     let selection = this.getSelection();
-@@ -2029,5 +2425,8 @@ SourceEditor.prototype = {
++    // Do selection indentation.
+     let lines = [];
+     for (let line, i = firstLine; i <= lastLine; i++) {
+       line = model.getLine(i, true);
+@@ -2029,5 +2433,8 @@ SourceEditor.prototype = {
      this._model = null;
      this._config = null;
      this._lastFind = null;

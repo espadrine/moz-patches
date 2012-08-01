@@ -1,0 +1,35 @@
+# HG changeset patch
+# Parent 221ab03716db6537605fe30aa0bfcfdbf9b2a1d8
+# User Thaddee Tyl <thaddee.tyl@gmail.com>
+Bug 779415 — Autocompletion of non-objects
+
+diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
+--- a/browser/devtools/webconsole/WebConsoleUtils.jsm
++++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
+@@ -940,12 +940,12 @@ function JSPropertyProvider(aScope, aInp
+ }
+ 
+ /**
+- * Get all accessible properties on this object.
++ * Get all accessible properties on this JS value.
+  * Filter those properties by name.
+  * Take only a certain number of those.
+  *
+- * @param object obj
+- *        Object whose properties we want to collect.
++ * @param any obj
++ *        JS value whose properties we want to collect.
+  *
+  * @param string matchProp
+  *        Filter for properties that match this one.
+@@ -956,6 +956,10 @@ function JSPropertyProvider(aScope, aInp
+  */
+ function getMatchedProps(aObj, aMatchProp = "")
+ {
++  if (aObj == null) { return {}; }
++  if (typeof aObj != "object") {
++    aObj = aObj.constructor.prototype;
++  }
+   let c = MAX_COMPLETIONS;
+   let names = {};   // Using an Object to avoid duplicates.
+   let ownNames = Object.getOwnPropertyNames(aObj);

@@ -6,7 +6,7 @@ Bug 762164 — Implement Autocompletion in the Source Editor
 diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratchpad/scratchpad.js
 --- a/browser/devtools/scratchpad/scratchpad.js
 +++ b/browser/devtools/scratchpad/scratchpad.js
-@@ -362,6 +362,20 @@ var Scratchpad = {
+@@ -362,6 +362,22 @@ var Scratchpad = {
    },
  
    /**
@@ -18,6 +18,8 @@ diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratc
 +   */
 +  getSandbox: function SP_getSandbox()
 +  {
++    // Evaluate the sandbox one to get all the autocompletion we can.
++    this.evalForContext("");
 +    return this.executionContext == SCRATCHPAD_CONTEXT_CONTENT ?
 +           this._contentSandbox :
 +           this._chromeSandbox;
@@ -27,7 +29,7 @@ diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratc
     * Execute the selected text (if any) or the entire editor content in the
     * current context.
     * @return mixed
-@@ -981,16 +995,21 @@ var Scratchpad = {
+@@ -981,11 +997,13 @@ var Scratchpad = {
  
      this.editor = new SourceEditor();
  
@@ -41,18 +43,10 @@ diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratc
      };
  
      let editorPlaceholder = document.getElementById("scratchpad-editor");
-     this.editor.init(editorPlaceholder, config,
-                      this._onEditorLoad.bind(this, state));
-+
-+    // Evaluate the sandbox one to get all the autocompletion we can.
-+    this.evalForContext("");
-   },
- 
-   /**
 diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
 --- a/browser/devtools/sourceeditor/source-editor-orion.jsm
 +++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
-@@ -25,6 +25,334 @@ const ORION_IFRAME = "data:text/html;cha
+@@ -25,6 +25,381 @@ const ORION_IFRAME = "data:text/html;cha
    "<div id='editor' style='height:100%'></div>" +
    "</body></html>";
  
@@ -93,6 +87,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 + *
 + * @param object ed
 + *        The Orion editor to target.
++ *        ed._mode must be one of the SourceEditor.MODES.
 + *        ed._view must be a TextView.
 + *        ed._model must be a TextModel.
 + *        ed._undoStack must be an UndoStack.
@@ -115,271 +110,317 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +  this.document = ed.editorElement.contentDocument;
 +  this.popover = createPopover(this.document, cssClass);
 +
-+  // When the autocompletion is triggered, it is "on",
-+  // and the index gives us the selected candidate.
-+  this._on = false;
-+  this._index = 0;
-+  this._start = 0;
-+  this._end = 0;
-+  this._acAddsText = false;
-+  this._completion = null;
++  this.complete = COMPLETERS[ed._mode];
++
++  this.editor.addEventListener(SourceEditor.EVENTS.TEXT_CHANGED, function() {
++    if (!this._acAddsText) {
++      dump('espadrine not cycling\n');
++      this.document.defaultView.setTimeout(this.displayCompletion.bind(this),0);
++    }
++  }.bind(this));
 +
 +  this._stopBound = this.stop.bind(this);
-+  this._keyBindingsBound = AC_keybindings.bind(this);
++  this._keyBindingsBound = this._keyBindings.bind(this);
 +}
 +
-+/**
-+ * Show the completions that are asked for.
-+ * This function assumes there exist an id=autocomplete
-+ * popup (see function createPopup()).
-+ *
-+ * @param array completions
-+ *        A list of string completions shown line by line.
-+ */
-+Autocompletion.prototype.displayCompletion =
-+function AC_displayCompletion(completions) {
-+  let ed = this.editor;
-+  let sel = ed.getSelection();
-+  // We don't complete on a selection of text.
-+  if (sel.start != sel.end) { return; }
-+  // We don't show the completion popover without any completion.
-+  if (completions.length < 1) { return; }
++Autocompletion.prototype = {
 +
-+  // The first child is a <select> element.
-+  let html = "<select>";
-+  for (let i = 0; i < completions.length; i++) {
-+    // The first option gets selected by default.
-+    html += "<option " + (i == this._index? "selected='true'": "") + ">" +
-+      completions[i] + "</option>";
-+  }
-+  html += "</select>";
-+  this.popover.innerHTML = html;
-+  // Track clicking on options.
-+  this.popover.firstChild.addEventListener("click", function() {
-+    if (this._on) {
-+      this.cycle(this.popover.firstChild.selectedIndex - this._index);
-+      let sel = this.editor.getSelection();
-+      this.editor._view.focus();
++  // The following set the way in which the autocompletion system works.
++  getSandbox: null,
++  nbVisibleCompletions: 10,
++  complete: null,
++
++  // The following are useful DOM elements.
++  editor: null,
++  document: null,
++  popover: null,
++
++  // When the autocompletion is triggered, it is "on",
++  // and the index gives us the selected candidate.
++  _on: false,
++  _cycling: false,
++  _index: 0,
++  _start: 0,
++  _end: 0,
++  _acAddsText: false,
++  _completion: null,
++
++  // The following two properties are functions that need to be bound to this.
++  _stopBound: null,
++  _keyBindingsBound: null,
++
++  /**
++   * Show the completions that are asked for.
++   * This function assumes there exist a
++   * popover (see function createPopover()).
++   */
++  displayCompletion: function AC_displayCompletion() {
++    dump('espadrine display completion\n');
++    //if (this._completion == null) {
++      // The following line may be computationally intensive.
++      this._completion = this.complete();
++    //}
++    let completions = this._completion.candidates;
++    dump('espadrine completions: '+ completions.length + '\n');
++
++    // Show the popover.
++    let ed = this.editor;
++    let sel = ed.getSelection();
++    // We don't complete on a selection of text.
++    // We don't show the completion popover without any completion.
++    if (sel.start != sel.end || completions.length < 1) {
++      this.hideCompletion();
++      return;
 +    }
-+  }.bind(this), false);
-+  this.popover.firstChild.size =
-+    Math.min(this.nbVisibleCompletions, completions.length);
 +
-+  // Positioning the popover.
-+  let coord = ed._view.getLocationAtOffset(ed._view.getCaretOffset());
-+  coord.y += ed._view.getLineHeight();
-+  ed._view.convert(coord, "document", "page");
-+  this.popover.style.left = coord.x + "px";
-+  this.popover.style.top = coord.y + "px";
-+  this.popover.style.display = "block";
++    // The first child is a <select> element.
++    let html = "<select>";
++    for (let i = 0; i < completions.length; i++) {
++      // The first option gets selected by default.
++      html += "<option " + (i == this._index? "selected='true'": "") + ">" +
++        completions[i] + "</option>";
++    }
++    html += "</select>";
++    this.popover.innerHTML = html;
++    // Track clicking on options.
++    this.popover.firstChild.addEventListener("click", function() {
++      if (this._cycling) {
++        this.cycle(this.popover.firstChild.selectedIndex - this._index);
++      } else {
++        this.cycle(this.popover.firstChild.selectedIndex);
++      }
++      this.editor._view.focus();
++    }.bind(this), false);
++    this.popover.firstChild.size =
++      Math.min(this.nbVisibleCompletions, completions.length);
 +
-+  // Adjust the position of the popover to ensure it fits in the viewport.
-+  let dwidth = this.document.documentElement.clientWidth;
-+  let dheight = this.document.documentElement.clientHeight;
-+  if (coord.y + this.popover.offsetHeight > dheight) {
-+    this.popover.style.top = (coord.y - this.popover.offsetHeight +
-+                              - ed._view.getLineHeight()) + "px";
-+  }
-+  if (coord.x + this.popover.offsetWidth > dwidth) {
-+    this.popover.style.left = (dwidth - this.popover.offsetWidth) + "px";
-+  }
++    // Positioning the popover.
++    let coord = ed._view.getLocationAtOffset(ed._view.getCaretOffset());
++    coord.y += ed._view.getLineHeight();
++    ed._view.convert(coord, "document", "page");
++    this.popover.style.left = coord.x + "px";
++    this.popover.style.top = coord.y + "px";
++    this.popover.style.display = "block";
 +
-+  // Preparing the editor for turning it off,
-+  // and then we turn it on.
-+  this.editor.addEventListener(SourceEditor.EVENTS.TEXT_CHANGED,
-+                               this._stopBound);
-+  this.editor.addEventListener(SourceEditor.EVENTS.SELECTION,
-+                               this._stopBound);
-+  this.editor.editorElement.addEventListener("keydown",
-+                               this._keyBindingsBound, true);
-+  this._on = true;
++    // Adjust the position of the popover to ensure it fits in the viewport.
++    let dwidth = this.document.documentElement.clientWidth;
++    let dheight = this.document.documentElement.clientHeight;
++    if (coord.y + this.popover.offsetHeight > dheight) {
++      this.popover.style.top = (coord.y - this.popover.offsetHeight +
++                                - ed._view.getLineHeight()) + "px";
++    }
++    if (coord.x + this.popover.offsetWidth > dwidth) {
++      this.popover.style.left = (dwidth - this.popover.offsetWidth) + "px";
++    }
++
++    // Select the correct entry.
++    this.popover.firstChild.selectedIndex = this._index;
++
++    // Preparing the editor for turning it off,
++    // and then we turn it on.
++    //this.editor.addEventListener(SourceEditor.EVENTS.TEXT_CHANGED,
++                                 //this._stopBound);
++    //this.editor.addEventListener(SourceEditor.EVENTS.SELECTION,
++                                 //this._stopBound);
++    this.editor.editorElement.addEventListener("keydown",
++                                 this._keyBindingsBound, true);
++    this._on = true;
++  },
++
++  // Specific autocompletion-only keys.
++  _keyBindings: function AC_keyBindings(e) {
++    if (e.keyCode == 27) {          // ESC key.
++      this.stop();
++      this.editor.setText("", this._start, this._end);
++      e.stopPropagation();
++    } else if (e.keyCode == 38) {   // ↑ key.
++      this.cycle(-1);
++      e.stopPropagation();
++      e.preventDefault();
++    } else if (e.keyCode == 40) {   // ↓ key.
++      this.cycle();
++      e.stopPropagation();
++      e.preventDefault();
++    }
++  },
++
++  /**
++   * Make the completion popup invisible.
++   */
++  hideCompletion: function AC_hideCompletion() {
++    dump('espadrine hide completion\n');
++    this.popover.style.display = "none";
++    //this.editor.removeEventListener(SourceEditor.EVENTS.TEXT_CHANGED,
++                                    //this._stopBound);
++    //this.editor.removeEventListener(SourceEditor.EVENTS.SELECTION,
++                                    //this._stopBound);
++    this.editor.editorElement.removeEventListener("keydown",
++                                    this._keyBindingsBound, true);
++    this._on = false;
++    this._cycling = false;
++  },
++
++  /**
++   * Cycle through autocompletion entries.
++   *
++   * @param number count
++   *        The number of completions to advance to / go back to.
++   */
++  cycle: function AC_cycle(count = 1) {
++    if (this._cycling) {
++      dump('espadrine resuming cycling\n');
++      this._index += count;
++      if (this._index >= this._completion.candidates.length) {
++        // Go back to the start.
++        this._index = 0;
++      } else if (this._index < 0) {
++        // Go back to the end.
++        this._index = this._completion.candidates.length - 1;
++      }
++      this.popover.firstChild.selectedIndex = this._index;
++
++      // Insert the corresponding entry.
++      this.insert(this._completion.completions[this._index]);
++
++    } else {  // We are not yet cycling.
++      dump('espadrine starting cycling.\n');
++      // Making a new spot in the undo stack allows the user
++      // to undo the autocompletion.
++      this.editor._undoStack.endCompoundChange();
++      this.editor._undoStack.startCompoundChange();
++
++      // The following line may be computationally intensive.
++      this._completion = this.complete();
++      this._index = 0;  // We can start on the first entry.
++      if (count < 0) {
++        // We can also start at the end.
++        this._index = this._completion.candidates.length - 1;
++      }
++      if (this._completion.candidates.length > 0) {
++        // If there is a choice to make, show the choice.
++        if (this._completion.candidates.length > 1) {
++          this.displayCompletion();
++          this._cycling = true;
++        }
++
++        // Now, show the first entry.
++        // We only do that now, because the popover must appear at the position
++        // that the cursor initially had.
++        this._start = this._end = this.editor.getCaretOffset();
++        this.insert(this._completion.completions[this._index]);
++      }
++    }
++  },
++
++  /**
++   * Insert a possible autocompletion in the editor.
++   *
++   * @param string text
++   *        The text to insert inline.
++   */
++  insert: function AC_insert(text) {
++    this._acAddsText = true;
++    this.editor.setText(text, this._start, this._end);
++    this._end = this._start + text.length;
++    this._acAddsText = false;
++  },
++
++  /**
++   * Make the autocompletion popover go away, remove useless data.
++   *
++   * @return boolean
++   *         Whether the stop operation was successful.
++   */
++  stop: function AC_stop() {
++    dump('espadrine stop completion\n');
++    // If the autocompletion system is going through an operation,
++    // we cannot stop it.
++    if (this._acAddsText) { return false; }
++    this.hideCompletion();
++    this._completion = null;
++    this._cycling = false;
++    return true;
++  },
++
 +};
 +
-+// Specific autocompletion-only keys.
-+function AC_keybindings(e) {
-+  if (e.keyCode == 27) {          // ESC key.
-+    this.stop();
-+    this.editor.setText("", this._start, this._end);
-+    e.stopPropagation();
-+  } else if (e.keyCode == 38) {   // ↑ key.
-+    this.cycle(-1);
-+    e.stopPropagation();
-+    e.preventDefault();
-+  } else if (e.keyCode == 40) {   // ↓ key.
-+    this.cycle();
-+    e.stopPropagation();
-+    e.preventDefault();
-+  }
-+}
 +
-+/**
-+ * Make the completion popup invisible.
-+ */
-+Autocompletion.prototype.hideCompletion =
-+function AC_hideCompletion() {
-+  this.popover.style.display = "none";
-+  this.editor.removeEventListener(SourceEditor.EVENTS.TEXT_CHANGED,
-+                                  this._stopBound);
-+  this.editor.removeEventListener(SourceEditor.EVENTS.SELECTION,
-+                                  this._stopBound);
-+  this.editor.editorElement.removeEventListener("keydown",
-+                                  this._keyBindingsBound, true);
-+  this._on = false;
-+}
++const COMPLETERS = {
++  /**
++   * Get a list of completions we can have, based on the state of the editor.
++   * Autocompletion happens based on the following factors
++   * (with increasing relevance):
++   *
++   * Level 0 = JS keywords.
++   * Level 1 = dynamic lookup of available properties.
++   *
++   * Use candidates for UI purposes, and completions when inserting the completion
++   * in the editor.
++   *
++   * @return object completion
++   *         An object with the following fields:
++   *         - candidates: A list of the matches to a possible completion.
++   *         - completions: A list of the associated completion to a candidate.
++   */
++  js: function AC_JSCompleter() {
++    let caret = this.editor.getCaretPosition();
++    let line = this.editor._model.getLine(caret.line);
++    let root = line.substr(0, caret.col);
 +
-+/**
-+ * Get a list of completions we can have, based on the state of the editor.
-+ * Autocompletion happens based on the following factors (with decreasing
-+ * importance):
-+ *
-+ * Level 0 = JS keywords.
-+ * Level 1 = dynamic lookup of available properties.
-+ *
-+ * Use candidates for UI purposes, and completions when inserting the completion
-+ * in the editor.
-+ *
-+ * @return object completion
-+ *         An object with the following fields:
-+ *         - candidates: A list of the matches to a possible completion.
-+ *         - completions: A list of the associated completion to a candidate.
-+ */
-+Autocompletion.prototype.computeCompletion =
-+function AC_computeCompletion() {
-+  let caret = this.editor.getCaretPosition();
-+  let line = this.editor._model.getLine(caret.line);
-+  let root = line.substr(0, caret.col);
++    let candidates = [];
++    let completions = [];
 +
-+  let candidates = [];
-+  let completions = [];
++    // We use a primitive sorting algorithm.
++    // The candidates are simply concatenated, level after level.
++    // We assume that Level 0 < Level 1 < etc.
 +
-+  // We use a primitive sorting algorithm.
-+  // The candidates are simply concatenated, level after level.
-+  // We assume that Level 0 < Level 1 < etc.
-+
-+  // Sandbox-based candidates (Level 1).
-+  if (this.getSandbox) {
-+    let sandboxCompletion = JSPropertyProvider(this.getSandbox(), root);
-+    if (sandboxCompletion) {
-+      candidates = candidates.concat(sandboxCompletion.matches);
-+      completions = completions.concat(
-+        sandboxCompletion.matches.map(function(comp, i) {
-+          return comp.substr(sandboxCompletion.matchProp.length);
-+        })
-+      );
++    // Sandbox-based candidates (Level 1).
++    if (this.getSandbox) {
++      let sandboxCompletion = JSPropertyProvider(this.getSandbox(), root);
++      if (sandboxCompletion) {
++        candidates = candidates.concat(sandboxCompletion.matches);
++        completions = completions.concat(
++          sandboxCompletion.matches.map(function(comp, i) {
++            return comp.substr(sandboxCompletion.matchProp.length);
++          })
++        );
++      }
 +    }
-+  }
 +
-+  // Keyword-based candidates (Level 0).
-+  const JSKeywords = [
-+    "break", "case", "catch", "const", "continue", "debugger", "default",
-+    "delete", "do", "else", "export", "finally", "for", "function", "get", "if",
-+    "import", "in", "instanceof", "let", "new", "of", "return", "set", "super",
-+    "switch", "this", "throw", "try", "typeof", "var", "void", "while", "with",
-+  ];
-+  let i = 1;
-+  // Get all characters that may be the start of a keyword.
-+  for (; (root.length - i >= 0) && /^[a-zA-Z0-9$_]$/.test(root[root.length-i])
-+       ; i++) {}
-+  // |startKey|: What may be the start of a keyword, up until the cursor.
-+  let startKey = root.slice(root.length - i + 1);
-+  // This autocompletion is not meaningful when we type a property…
-+  if (root[root.length - i] != ".") {
-+    // Thou shalt only complete what there is to complete.
-+    if (startKey.length > 0) {
-+      for (let word of JSKeywords) {
-+        if (word.indexOf(startKey) == 0) {
-+          candidates.push(word);
-+          completions.push(word.slice(startKey.length));
++    // Keyword-based candidates (Level 0).
++    const JSKeywords = [
++      "break", "case", "catch", /* "class", */ "const", "continue", "debugger",
++      "default", "delete", "do", "else", "export", "false", "finally", "for",
++      "function", "get", "if", "import", "in", "instanceof", "let", "new",
++      "null", "of", "return", "set", "super", "switch", "this", "true", "throw",
++      "try", "typeof", "undefined", "var", "void", "while", "with",
++    ];
++    let i = 1;
++    // Get all characters that may be the start of a keyword.
++    for (; (root.length - i >= 0) && /^[a-zA-Z0-9$_]$/.test(root[root.length-i])
++         ; i++) {}
++    // |startKey|: What may be the start of a keyword, up until the cursor.
++    let startKey = root.slice(root.length - i + 1);
++    // This autocompletion is not meaningful when we type a property…
++    if (root[root.length - i] != ".") {
++      // Thou shalt only complete what there is to complete.
++      if (startKey.length > 0) {
++        for (let word of JSKeywords) {
++          if (word.indexOf(startKey) == 0) {
++            candidates.push(word);
++            completions.push(word.slice(startKey.length));
++          }
 +        }
 +      }
 +    }
-+  }
 +
-+  return {
-+    candidates: candidates,
-+    completions: completions,
-+  };
++    return {
++      candidates: candidates,
++      completions: completions,
++    };
++  },
 +};
 +
-+/**
-+ * Cycle through autocompletion entries.
-+ *
-+ * @param number count
-+ *        The number of completions to advance to / go back to.
-+ */
-+Autocompletion.prototype.cycle =
-+function AC_cycle(count = 1) {
-+  if (this._on) {
-+    this._index += count;
-+    if (this._index >= this._completion.candidates.length) {
-+      // Go back to the start.
-+      this._index = 0;
-+    } else if (this._index < 0) {
-+      // Go back to the end.
-+      this._index = this._completion.candidates.length - 1;
-+    }
-+    this.popover.firstChild.selectedIndex = this._index;
-+
-+    // Insert the corresponding entry.
-+    this.insert(this._completion.completions[this._index]);
-+
-+  } else {  // Autocompletion is not yet on.
-+    // Making a new spot in the undo stack allows the user
-+    // to undo the autocompletion.
-+    this.editor._undoStack.endCompoundChange();
-+    this.editor._undoStack.startCompoundChange();
-+
-+    // The following line may be computationally intensive.
-+    this._completion = this.computeCompletion();
-+    this._index = 0;  // We can start on the first entry.
-+    if (count < 0) {
-+      // We can also start at the end.
-+      this._index = this._completion.candidates.length - 1;
-+    }
-+    if (this._completion.candidates.length > 0) {
-+      // If there is a choice to make, show the choice.
-+      if (this._completion.candidates.length > 1) {
-+        this.displayCompletion(this._completion.candidates);
-+      }
-+
-+      // Now, show the first entry.
-+      // We only do that now, because the popover must appear at the position
-+      // that the cursor initially had.
-+      this._start = this._end = this.editor.getCaretOffset();
-+      this.insert(this._completion.completions[this._index]);
-+    }
-+  }
-+}
-+
-+/**
-+ * Insert a possible autocompletion in the editor.
-+ *
-+ * @param string text
-+ *        The text to insert inline.
-+ */
-+Autocompletion.prototype.insert =
-+function AC_insert(text) {
-+  this._acAddsText = true;
-+  this.editor.setText(text, this._start, this._end);
-+  this._end = this._start + text.length;
-+  this._acAddsText = false;
-+}
-+
-+/**
-+ * Make the autocompletion popover go away, remove useless data.
-+ *
-+ * @return boolean
-+ *         Whether the stop operation was successful.
-+ */
-+Autocompletion.prototype.stop =
-+function AC_stop() {
-+  // If the autocompletion system is going through an operation,
-+  // we cannot stop it.
-+  if (this._acAddsText) { return false; }
-+  this.hideCompletion();
-+  this._completion = null;
-+  return true;
-+}
 +
 +
 +
@@ -387,7 +428,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
  const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
  
  /**
-@@ -191,6 +519,9 @@ SourceEditor.prototype = {
+@@ -191,6 +566,9 @@ SourceEditor.prototype = {
    _contextMenu: null,
    _dirty: false,
  
@@ -397,7 +438,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
    /**
     * The Source Editor user interface manager.
     * @type object
-@@ -247,6 +578,8 @@ SourceEditor.prototype = {
+@@ -247,6 +625,8 @@ SourceEditor.prototype = {
                            SourceEditor.DEFAULTS[key];
      }
  
@@ -406,7 +447,21 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      // TODO: Bug 725677 - Remove the deprecated placeholderText option from the
      // Source Editor initialization.
      if (aConfig.placeholderText) {
-@@ -460,7 +793,8 @@ SourceEditor.prototype = {
+@@ -363,6 +743,13 @@ SourceEditor.prototype = {
+ 
+     this.setMode(config.mode);
+ 
++    // The following needs the editor to have its mode set.
++    this._autocomplete = new Autocompletion(this, {
++      nbVisibleCompletions: 10,
++      cssClass: "autocomplete",
++      getSandbox: this._getSandbox,
++    });
++
+     this._undoStack = new UndoStack(this._view, config.undoLimit);
+ 
+     this._dragAndDrop = new TextDND(this._view, this._undoStack);
+@@ -460,7 +847,8 @@ SourceEditor.prototype = {
  
    /**
     * The "tab" editor action implementation. This adds support for expanded tabs
@@ -416,7 +471,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
     * @private
     */
    _doTab: function SE__doTab()
-@@ -509,6 +843,15 @@ SourceEditor.prototype = {
+@@ -509,6 +897,15 @@ SourceEditor.prototype = {
        return true;
      }
  
@@ -432,7 +487,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      return false;
    },
  
-@@ -536,6 +879,16 @@ SourceEditor.prototype = {
+@@ -536,6 +933,16 @@ SourceEditor.prototype = {
        indent = (new Array(this._tabSize + 1)).join(" ");
      }
  
@@ -449,20 +504,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      let lines = [];
      for (let line, i = firstLine; i <= lastLine; i++) {
        line = model.getLine(i, true);
-@@ -1764,6 +2117,12 @@ SourceEditor.prototype = {
- 
-     switch (aMode) {
-       case SourceEditor.MODES.JAVASCRIPT:
-+        this._autocomplete = new Autocompletion(this, {
-+          nbVisibleCompletions: 10,
-+          cssClass: "autocomplete",
-+          getSandbox: this._getSandbox,
-+        });
-+
-       case SourceEditor.MODES.CSS:
-         let TextStyler =
-           window.require("examples/textview/textStyler").TextStyler;
-@@ -2029,5 +2388,8 @@ SourceEditor.prototype = {
+@@ -2029,5 +2436,8 @@ SourceEditor.prototype = {
      this._model = null;
      this._config = null;
      this._lastFind = null;

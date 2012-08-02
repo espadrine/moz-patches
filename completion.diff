@@ -52,7 +52,7 @@ diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratc
 diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
 --- a/browser/devtools/sourceeditor/source-editor-orion.jsm
 +++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
-@@ -25,6 +25,379 @@ const ORION_IFRAME = "data:text/html;cha
+@@ -25,6 +25,334 @@ const ORION_IFRAME = "data:text/html;cha
    "<div id='editor' style='height:100%'></div>" +
    "</body></html>";
  
@@ -120,8 +120,12 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +  this._on = false;
 +  this._index = 0;
 +  this._start = 0;
++  this._end = 0;
 +  this._acAddsText = false;
 +  this._completion = null;
++
++  this._stopBound = this.stop.bind(this);
++  this._keyBindingsBound = AC_keybindings.bind(this);
 +}
 +
 +/**
@@ -183,9 +187,30 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +  // Preparing the editor for turning it off,
 +  // and then we turn it on.
 +  this.editor.addEventListener(SourceEditor.EVENTS.TEXT_CHANGED,
-+                               this.stop.bind(this));
++                               this._stopBound);
++  this.editor.addEventListener(SourceEditor.EVENTS.SELECTION,
++                               this._stopBound);
++  this.editor.editorElement.addEventListener("keydown",
++                               this._keyBindingsBound, true);
 +  this._on = true;
 +};
++
++// Specific autocompletion-only keys.
++function AC_keybindings(e) {
++  if (e.keyCode == 27) {          // ESC key.
++    this.stop();
++    this.editor.setText("", this._start, this._end);
++    e.stopPropagation();
++  } else if (e.keyCode == 38) {   // ↑ key.
++    this.cycle(-1);
++    e.stopPropagation();
++    e.preventDefault();
++  } else if (e.keyCode == 40) {   // ↓ key.
++    this.cycle();
++    e.stopPropagation();
++    e.preventDefault();
++  }
++}
 +
 +/**
 + * Make the completion popup invisible.
@@ -193,7 +218,12 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +Autocompletion.prototype.hideCompletion =
 +function AC_hideCompletion() {
 +  this.popover.style.display = "none";
-+  this.editor.removeEventListener(SourceEditor.EVENTS.TEXT_CHANGED, this.stop);
++  this.editor.removeEventListener(SourceEditor.EVENTS.TEXT_CHANGED,
++                                  this._stopBound);
++  this.editor.removeEventListener(SourceEditor.EVENTS.SELECTION,
++                                  this._stopBound);
++  this.editor.editorElement.removeEventListener("keydown",
++                                  this._keyBindingsBound, true);
 +  this._on = false;
 +}
 +
@@ -352,87 +382,12 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +}
 +
 +
-+/*
-+(function() {
-+  CodeMirror.simpleHint = function(editor, getHints) {
-+    // We want a single cursor position.
-+    if (editor.somethingSelected()) return;
-+    var result = getHints(editor);
-+    if (!result || !result.list.length) return;
-+    var completions = result.list;
-+    function insert(str) {
-+      editor.replaceRange(str, result.from, result.to);
-+    }
-+    // When there is only one completion, use it directly.
-+    if (completions.length == 1) {insert(completions[0]); return true;}
-+
-+    // Build the select widget
-+    var complete = document.createElement("div");
-+    complete.className = "CodeMirror-completions";
-+    var sel = complete.appendChild(document.createElement("select"));
-+    // Opera doesn't move the selection when pressing up/down in a
-+    // multi-select, but it does properly support the size property on
-+    // single-selects, so no multi-select is necessary.
-+    if (!window.opera) sel.multiple = true;
-+    for (var i = 0; i < completions.length; ++i) {
-+      var opt = sel.appendChild(document.createElement("option"));
-+      opt.appendChild(document.createTextNode(completions[i]));
-+    }
-+    sel.firstChild.selected = true;
-+    sel.size = Math.min(10, completions.length);
-+    var pos = editor.cursorCoords();
-+    complete.style.left = pos.x + "px";
-+    complete.style.top = pos.yBot + "px";
-+    document.body.appendChild(complete);
-+    // If we're at the edge of the screen, then we want the menu to appear on the left of the cursor.
-+    var winW = window.innerWidth || Math.max(document.body.offsetWidth, document.documentElement.offsetWidth);
-+    if(winW - pos.x < sel.clientWidth)
-+      complete.style.left = (pos.x - sel.clientWidth) + "px";
-+    // Hack to hide the scrollbar.
-+    if (completions.length <= 10)
-+      complete.style.width = (sel.clientWidth - 1) + "px";
-+
-+    var done = false;
-+    function close() {
-+      if (done) return;
-+      done = true;
-+      complete.parentNode.removeChild(complete);
-+    }
-+    function pick() {
-+      insert(completions[sel.selectedIndex]);
-+      close();
-+      setTimeout(function(){editor.focus();}, 50);
-+    }
-+    CodeMirror.connect(sel, "blur", close);
-+    CodeMirror.connect(sel, "keydown", function(event) {
-+      var code = event.keyCode;
-+      // Enter
-+      if (code == 13) {CodeMirror.e_stop(event); pick();}
-+      // Escape
-+      else if (code == 27) {CodeMirror.e_stop(event); close(); editor.focus();}
-+      else if (code != 38 && code != 40) {
-+        close(); editor.focus();
-+        // Pass the event to the CodeMirror instance so that it can handle things like backspace properly.
-+        editor.triggerOnKeyDown(event);
-+        setTimeout(function(){CodeMirror.simpleHint(editor, getHints);}, 50);
-+      }
-+    });
-+    CodeMirror.connect(sel, "dblclick", pick);
-+
-+    sel.focus();
-+    // Opera sometimes ignores focusing a freshly created node
-+    if (window.opera) setTimeout(function(){if (!done) sel.focus();}, 100);
-+    return true;
-+  };
-+})();
-+*/
-+
 +
 +
  const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
  
  /**
-@@ -191,6 +564,9 @@ SourceEditor.prototype = {
+@@ -191,6 +519,9 @@ SourceEditor.prototype = {
    _contextMenu: null,
    _dirty: false,
  
@@ -442,7 +397,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
    /**
     * The Source Editor user interface manager.
     * @type object
-@@ -247,6 +623,8 @@ SourceEditor.prototype = {
+@@ -247,6 +578,8 @@ SourceEditor.prototype = {
                            SourceEditor.DEFAULTS[key];
      }
  
@@ -451,20 +406,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      // TODO: Bug 725677 - Remove the deprecated placeholderText option from the
      // Source Editor initialization.
      if (aConfig.placeholderText) {
-@@ -363,6 +741,12 @@ SourceEditor.prototype = {
- 
-     this.setMode(config.mode);
- 
-+    this._autocomplete = new Autocompletion(this, {
-+      nbVisibleCompletions: 10,
-+      cssClass: "autocomplete",
-+      getSandbox: this._getSandbox,
-+    });
-+
-     this._undoStack = new UndoStack(this._view, config.undoLimit);
- 
-     this._dragAndDrop = new TextDND(this._view, this._undoStack);
-@@ -460,7 +844,8 @@ SourceEditor.prototype = {
+@@ -460,7 +793,8 @@ SourceEditor.prototype = {
  
    /**
     * The "tab" editor action implementation. This adds support for expanded tabs
@@ -474,7 +416,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
     * @private
     */
    _doTab: function SE__doTab()
-@@ -509,6 +894,15 @@ SourceEditor.prototype = {
+@@ -509,6 +843,15 @@ SourceEditor.prototype = {
        return true;
      }
  
@@ -490,7 +432,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      return false;
    },
  
-@@ -536,6 +930,16 @@ SourceEditor.prototype = {
+@@ -536,6 +879,16 @@ SourceEditor.prototype = {
        indent = (new Array(this._tabSize + 1)).join(" ");
      }
  
@@ -507,7 +449,20 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      let lines = [];
      for (let line, i = firstLine; i <= lastLine; i++) {
        line = model.getLine(i, true);
-@@ -2029,5 +2433,8 @@ SourceEditor.prototype = {
+@@ -1764,6 +2117,12 @@ SourceEditor.prototype = {
+ 
+     switch (aMode) {
+       case SourceEditor.MODES.JAVASCRIPT:
++        this._autocomplete = new Autocompletion(this, {
++          nbVisibleCompletions: 10,
++          cssClass: "autocomplete",
++          getSandbox: this._getSandbox,
++        });
++
+       case SourceEditor.MODES.CSS:
+         let TextStyler =
+           window.require("examples/textview/textStyler").TextStyler;
+@@ -2029,5 +2388,8 @@ SourceEditor.prototype = {
      this._model = null;
      this._config = null;
      this._lastFind = null;

@@ -43,17 +43,33 @@ diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratc
      };
  
      let editorPlaceholder = document.getElementById("scratchpad-editor");
-diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
---- a/browser/devtools/sourceeditor/source-editor-orion.jsm
-+++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
-@@ -25,6 +25,374 @@ const ORION_IFRAME = "data:text/html;cha
-   "<div id='editor' style='height:100%'></div>" +
-   "</body></html>";
+diff --git a/browser/devtools/sourceeditor/Makefile.in b/browser/devtools/sourceeditor/Makefile.in
+--- a/browser/devtools/sourceeditor/Makefile.in
++++ b/browser/devtools/sourceeditor/Makefile.in
+@@ -14,6 +14,7 @@ TEST_DIRS += test
  
+ EXTRA_JS_MODULES = \
+ 	source-editor.jsm \
++	autocompletion.jsm \
+ 	source-editor-orion.jsm \
+ 	source-editor-ui.jsm \
+ 	$(NULL)
+diff --git a/browser/devtools/sourceeditor/autocompletion.jsm b/browser/devtools/sourceeditor/autocompletion.jsm
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/sourceeditor/autocompletion.jsm
+@@ -0,0 +1,383 @@
++/* vim:set ts=2 sw=2 sts=2 et tw=80:
++ * This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 +
-+// Autocompletion stuff is down here.
++"use strict";
 +
++const Cu = Components.utils;
 +Cu.import("resource:///modules/WebConsoleUtils.jsm");
++
++var EXPORTED_SYMBOLS = ["Autocompletion"];
 +
 +/**
 + * Create a new popover. It gets a "div.popover" class.
@@ -87,7 +103,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 + *
 + * @param object ed
 + *        The Orion editor to target.
-+ *        ed._mode must be one of the SourceEditor.MODES.
++ *        ed._mode must be "js".
 + *        ed._view must be a TextView.
 + *        ed._model must be a TextModel.
 + *        ed._undoStack must be an UndoStack.
@@ -110,14 +126,17 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +  this.document = ed.editorElement.contentDocument;
 +  this.popover = createPopover(this.document, cssClass);
 +
++  // The function we use to autocomplete.
 +  this.complete = COMPLETERS[ed._mode];
 +
-+  this.editor.addEventListener(SourceEditor.EVENTS.TEXT_CHANGED, function() {
++  // The following will popup the autocompletion popover on each character!
++  this.editor.addEventListener("TextChanged", function() {
 +    if (!this._acAddsText) {
 +      this.document.defaultView.setTimeout(this.displayCompletion.bind(this),0);
 +    }
 +  }.bind(this));
 +
++  // Those will become event listeners.
 +  this._stopBound = this.stop.bind(this);
 +  this._keyBindingsBound = this._keyBindings.bind(this);
 +}
@@ -150,14 +169,14 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +
 +  /**
 +   * Show the completions that are asked for.
-+   * This function assumes there exist a
++   * This function assumes there exists a
 +   * popover (see function createPopover()).
 +   */
 +  displayCompletion: function AC_displayCompletion() {
-+    //if (this._completion == null) {
++    if (this._completion == null) {
 +      // The following line may be computationally intensive.
 +      this._completion = this.complete();
-+    //}
++    }
 +    let completions = this._completion.candidates;
 +
 +    // Show the popover.
@@ -184,7 +203,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +      if (this._cycling) {
 +        this.cycle(this.popover.firstChild.selectedIndex - this._index);
 +      } else {
-+        this.cycle(this.popover.firstChild.selectedIndex);
++        this.cycle(this.popover.firstChild.selectedIndex + 1);
 +      }
 +      this.editor._view.focus();
 +    }.bind(this), false);
@@ -215,10 +234,10 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +
 +    // Preparing the editor for turning it off,
 +    // and then we turn it on.
-+    //this.editor.addEventListener(SourceEditor.EVENTS.TEXT_CHANGED,
-+                                 //this._stopBound);
-+    //this.editor.addEventListener(SourceEditor.EVENTS.SELECTION,
-+                                 //this._stopBound);
++    this.editor.addEventListener("TextChanged",
++                                 this._stopBound);
++    this.editor.addEventListener("Selection",
++                                 this._stopBound);
 +    this.editor.editorElement.addEventListener("keydown",
 +                                 this._keyBindingsBound, true);
 +    this._on = true;
@@ -246,14 +265,15 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +   */
 +  hideCompletion: function AC_hideCompletion() {
 +    this.popover.style.display = "none";
-+    //this.editor.removeEventListener(SourceEditor.EVENTS.TEXT_CHANGED,
-+                                    //this._stopBound);
-+    //this.editor.removeEventListener(SourceEditor.EVENTS.SELECTION,
-+                                    //this._stopBound);
++    this.editor.removeEventListener("TextChanged",
++                                    this._stopBound);
++    this.editor.removeEventListener("Selection",
++                                    this._stopBound);
 +    this.editor.editorElement.removeEventListener("keydown",
 +                                    this._keyBindingsBound, true);
++    this._completion = null;
 +    this._on = false;
-+    this._cycling = false;
++    this._index = 0;
 +  },
 +
 +  /**
@@ -285,11 +305,16 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +
 +      // The following line may be computationally intensive.
 +      this._completion = this.complete();
-+      this._index = 0;  // We can start on the first entry.
-+      if (count < 0) {
++      if (count == 0) { count = 1; }
++      if (count > 0) {
++        // We can start from the beginning.
++        this._index = count - 1;
++      } else if (count < 0) {
 +        // We can also start at the end.
-+        this._index = this._completion.candidates.length - 1;
++        this._index = this._completion.candidates.length + count;
 +      }
++
++      // Only do something if we have a completion to work with.
 +      if (this._completion.candidates.length > 0) {
 +        // If there is a choice to make, show the choice.
 +        if (this._completion.candidates.length > 1) {
@@ -330,7 +355,6 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +    // we cannot stop it.
 +    if (this._acAddsText) { return false; }
 +    this.hideCompletion();
-+    this._completion = null;
 +    this._cycling = false;
 +    return true;
 +  },
@@ -338,6 +362,9 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +};
 +
 +
++// Map from language file extensions to functions that can autocomplete the
++// source editor, assuming that, for each function, |this| is an 
++// instance of Autocompletion.
 +const COMPLETERS = {
 +  /**
 +   * Get a list of completions we can have, based on the state of the editor.
@@ -415,13 +442,26 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +};
 +
 +
-+
-+
+diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
+--- a/browser/devtools/sourceeditor/source-editor-orion.jsm
++++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
+@@ -11,6 +11,7 @@ const Ci = Components.interfaces;
+ Cu.import("resource://gre/modules/Services.jsm");
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource:///modules/source-editor-ui.jsm");
++Cu.import("resource:///modules/autocompletion.jsm");
+ 
+ XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
+                                    "@mozilla.org/widget/clipboardhelper;1",
+@@ -25,6 +26,7 @@ const ORION_IFRAME = "data:text/html;cha
+   "<div id='editor' style='height:100%'></div>" +
+   "</body></html>";
+ 
 +
  const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
  
  /**
-@@ -191,6 +559,9 @@ SourceEditor.prototype = {
+@@ -191,6 +193,9 @@ SourceEditor.prototype = {
    _contextMenu: null,
    _dirty: false,
  
@@ -431,7 +471,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
    /**
     * The Source Editor user interface manager.
     * @type object
-@@ -247,6 +618,8 @@ SourceEditor.prototype = {
+@@ -247,6 +252,8 @@ SourceEditor.prototype = {
                            SourceEditor.DEFAULTS[key];
      }
  
@@ -440,7 +480,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      // TODO: Bug 725677 - Remove the deprecated placeholderText option from the
      // Source Editor initialization.
      if (aConfig.placeholderText) {
-@@ -363,6 +736,13 @@ SourceEditor.prototype = {
+@@ -363,6 +370,13 @@ SourceEditor.prototype = {
  
      this.setMode(config.mode);
  
@@ -454,7 +494,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      this._undoStack = new UndoStack(this._view, config.undoLimit);
  
      this._dragAndDrop = new TextDND(this._view, this._undoStack);
-@@ -460,7 +840,8 @@ SourceEditor.prototype = {
+@@ -460,7 +474,8 @@ SourceEditor.prototype = {
  
    /**
     * The "tab" editor action implementation. This adds support for expanded tabs
@@ -464,7 +504,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
     * @private
     */
    _doTab: function SE__doTab()
-@@ -509,6 +890,15 @@ SourceEditor.prototype = {
+@@ -509,6 +524,15 @@ SourceEditor.prototype = {
        return true;
      }
  
@@ -480,7 +520,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      return false;
    },
  
-@@ -536,6 +926,16 @@ SourceEditor.prototype = {
+@@ -536,6 +560,16 @@ SourceEditor.prototype = {
        indent = (new Array(this._tabSize + 1)).join(" ");
      }
  
@@ -497,7 +537,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      let lines = [];
      for (let line, i = firstLine; i <= lastLine; i++) {
        line = model.getLine(i, true);
-@@ -2029,5 +2429,8 @@ SourceEditor.prototype = {
+@@ -2029,5 +2063,8 @@ SourceEditor.prototype = {
      this._model = null;
      this._config = null;
      this._lastFind = null;

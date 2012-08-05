@@ -1,0 +1,15 @@
+# HG changeset patch
+# Parent 68fdd38be81053e460cbce828df99eb06da47d11
+# User Thaddee Tyl <thaddee.tyl@gmail.com>
+diff --git a/browser/themes/pinstripe/devtools/orion.css b/browser/themes/pinstripe/devtools/orion.css
+--- a/browser/themes/pinstripe/devtools/orion.css
++++ b/browser/themes/pinstripe/devtools/orion.css
+@@ -4,7 +4,7 @@
+ 
+ .viewContainer {
+   background: #cddae5; /* This will be seen as the continuation of the ruler */
+-  font-family: monospace;
++  font-family: Menlo, monospace;
+   font-size: inherit; /* inherit browser's default monospace font size */
+ }
+ 

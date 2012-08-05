@@ -1,18 +1,11 @@
 # HG changeset patch
-# Parent 52fc5cd6722095ac85e2acab40c488c6a518303e
+# Parent facec889778e35ec3abed68ee312c64ffec3cf7a
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
+
 diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
 --- a/browser/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
-@@ -895,6 +895,7 @@ function JSPropertyProvider(aScope, aInp
-   if (beginning.err) {
-     return null;
-   }
-+  dump('espadrine: beginning ' + JSON.stringify(beginning) + '\n');
- 
-   // If the current state is not STATE_NORMAL, then we are inside of an string
-   // which means that no completion is possible.
-@@ -953,7 +954,7 @@ function JSPropertyProvider(aScope, aInp
+@@ -953,7 +953,7 @@ function JSPropertyProvider(aScope, aInp
      return null;
    }
  
@@ -21,7 +14,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
  
    return {
      matchProp: matchProp,
-@@ -966,18 +967,28 @@ function JSPropertyProvider(aScope, aInp
+@@ -966,18 +966,28 @@ function JSPropertyProvider(aScope, aInp
   * Filter those properties by name.
   * Take only a certain number of those.
   *
@@ -55,7 +48,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
    if (aObj == null) { return {}; }
    try {
      Object.getPrototypeOf(aObj);
-@@ -988,13 +999,31 @@ function getMatchedProps(aObj, aMatchPro
+@@ -988,13 +998,31 @@ function getMatchedProps(aObj, aMatchPro
    let names = {};   // Using an Object to avoid duplicates.
    let ownNames = Object.getOwnPropertyNames(aObj);
    for (let i = 0; i < ownNames.length; i++) {
@@ -90,7 +83,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
        }
      }
    }
-@@ -1002,7 +1031,7 @@ function getMatchedProps(aObj, aMatchPro
+@@ -1002,7 +1030,7 @@ function getMatchedProps(aObj, aMatchPro
    // We need to recursively go up the prototype chain.
    aObj = Object.getPrototypeOf(aObj);
    if (aObj !== null) {

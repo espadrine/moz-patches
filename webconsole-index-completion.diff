@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent facec889778e35ec3abed68ee312c64ffec3cf7a
+# Parent 3281298476f0806b3d316075c30330414f2b0861
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
 Bug 776106 — Autocompletion on arrays include numbers
 
@@ -15,15 +15,11 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
  
    return {
      matchProp: matchProp,
-@@ -966,18 +966,28 @@ function JSPropertyProvider(aScope, aInp
-  * Filter those properties by name.
-  * Take only a certain number of those.
-  *
-- * @param any obj
-+ * @param any aObj
+@@ -969,15 +969,25 @@ function JSPropertyProvider(aScope, aInp
+  * @param mixed aObj
   *        JS value whose properties we want to collect.
   *
-- * @param string matchProp
+- * @param string aMatchProp
 - *        Filter for properties that match this one.
 - *        Defaults to the empty string (which always matches).
 + * @param object aOptions
@@ -49,17 +45,15 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
    if (aObj == null) { return {}; }
    try {
      Object.getPrototypeOf(aObj);
-@@ -988,13 +998,31 @@ function getMatchedProps(aObj, aMatchPro
+@@ -988,13 +998,30 @@ function getMatchedProps(aObj, aMatchPro
    let names = {};   // Using an Object to avoid duplicates.
    let ownNames = Object.getOwnPropertyNames(aObj);
    for (let i = 0; i < ownNames.length; i++) {
 -    if (ownNames[i].indexOf(aMatchProp) == 0) {
--      if (names[ownNames[i]] != true) {
 +    // Filtering happens here.
 +    if (ownNames[i].indexOf(aOptions.matchProp) == 0) {
 +      // If we already have it in, no need to append it.
-+      if (names[ownNames[i]] != true &&
-+          +ownNames[i] != +ownNames[i]) {
+       if (names[ownNames[i]] != true) {
          c--;
          if (c < 0) {
            return names;
@@ -84,7 +78,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
        }
      }
    }
-@@ -1002,7 +1030,7 @@ function getMatchedProps(aObj, aMatchPro
+@@ -1002,7 +1029,7 @@ function getMatchedProps(aObj, aMatchPro
    // We need to recursively go up the prototype chain.
    aObj = Object.getPrototypeOf(aObj);
    if (aObj !== null) {

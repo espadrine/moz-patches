@@ -1,12 +1,12 @@
 # HG changeset patch
-# Parent 3be16ef4842ed40dd7ed115b8a9badeb29d1e6a7
+# Parent 21c0921f0872c7299f3c455a055d411df4e7e071
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
 Bug 780564 — Perf improvement by using loops instead of recursion
 
 diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
 --- a/browser/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
-@@ -996,51 +996,43 @@ function getMatchedProps(aObj, aOptions 
+@@ -996,50 +996,42 @@ function getMatchedProps(aObj, aOptions 
    }
    let c = MAX_COMPLETIONS;
    let names = {};   // Using an Object to avoid duplicates.
@@ -15,8 +15,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 -    // Filtering happens here.
 -    if (ownNames[i].indexOf(aOptions.matchProp) == 0) {
 -      // If we already have it in, no need to append it.
--      if (names[ownNames[i]] != true &&
--          +ownNames[i] != +ownNames[i]) {
+-      if (names[ownNames[i]] != true) {
 -        c--;
 -        if (c < 0) {
 -          return names;
@@ -36,8 +35,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 +      // Filtering happens here.
 +      if (ownNames[i].indexOf(aOptions.matchProp) == 0) {
 +        // If we already have it in, no need to append it.
-+        if (names[ownNames[i]] != true &&
-+            +ownNames[i] != +ownNames[i]) {
++        if (names[ownNames[i]] != true) {
 +          c--;
 +          if (c < 0) {
 +            return names;

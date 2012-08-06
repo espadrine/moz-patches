@@ -6,7 +6,16 @@ Bug 779415 — Autocompletion of non-objects
 diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
 --- a/browser/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
-@@ -962,12 +962,12 @@ function JSPropertyProvider(aScope, aInp
+@@ -953,7 +953,7 @@ function JSPropertyProvider(aScope, aInp
+     return null;
+   }
+ 
+-  let matches = Object.keys(getMatchedProps(obj, matchProp));
++  let matches = Object.keys(getMatchedProps(obj, {matchProp:matchProp}));
+ 
+   return {
+     matchProp: matchProp,
+@@ -962,51 +962,76 @@ function JSPropertyProvider(aScope, aInp
  }
  
  /**
@@ -17,15 +26,32 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
   *
 - * @param object obj
 - *        Object whose properties we want to collect.
-+ * @param any obj
++ * @param mixed aObj
 + *        JS value whose properties we want to collect.
   *
-  * @param string matchProp
-  *        Filter for properties that match this one.
-@@ -978,6 +978,12 @@ function JSPropertyProvider(aScope, aInp
+- * @param string matchProp
+- *        Filter for properties that match this one.
+- *        Defaults to the empty string (which always matches).
++ * @param object aOptions
++ *        Options that the algorithm takes.
++ *        - matchProp (string): Filter for properties that match this one.
++ *          Defaults to the empty string (which always matches).
++ *        - completeAfter (string): Character after which we are getting the
++ *          properties. Should be either "." or "[". Chooses how the properties
++ *          should look: "." gives the string directly, and doesn't give number
++ *          indices, whereas "[" surrounds the properties with '"' and gives
++ *          number indices.
+  *
+  * @return object
+  *         Object whose keys are all accessible properties on the object.
   */
- function getMatchedProps(aObj, aMatchProp = "")
+-function getMatchedProps(aObj, aMatchProp = "")
++function getMatchedProps(aObj, aOptions = {matchProp: "", completeAfter: "."})
  {
++  // Argument defaults.
++  aOptions.matchProp = aOptions.matchProp || "";
++  aOptions.completeAfter = aOptions.completeAfter || ".";
++
 +  if (aObj == null) { return {}; }
 +  try {
 +    Object.getPrototypeOf(aObj);
@@ -34,7 +60,67 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 +  }
    let c = MAX_COMPLETIONS;
    let names = {};   // Using an Object to avoid duplicates.
-   let ownNames = Object.getOwnPropertyNames(aObj);
+-  let ownNames = Object.getOwnPropertyNames(aObj);
+-  for (let i = 0; i < ownNames.length; i++) {
+-    if (ownNames[i].indexOf(aMatchProp) == 0) {
+-      if (names[ownNames[i]] != true) {
+-        c--;
+-        if (c < 0) {
+-          return names;
++
++  // We need to go up the prototype chain.
++  let ownNames = null;
++  while (aObj !== null) {
++    ownNames = Object.getOwnPropertyNames(aObj);
++    for (let i = 0; i < ownNames.length; i++) {
++      // Filtering happens here.
++      if (ownNames[i].indexOf(aOptions.matchProp) == 0) {
++        // If we already have it in, no need to append it.
++        if (names[ownNames[i]] != true) {
++          c--;
++          if (c < 0) {
++            return names;
++          }
++          if (aOptions.completeAfter[0] == ".") {
++            // If it is an array index, we can't take it.
++            // This uses a trick: converting a string to a number yields NaN if
++            // the operation failed, and NaN is not equal to itself.
++            if (+ownNames[i] != +ownNames[i]) {
++              names[ownNames[i]] = true;
++            }
++          } else if (aOptions.completeAfter[0] == "[") {
++            // See above for the following trick.
++            if (+ownNames[i] != +ownNames[i]) {
++              names['"' + ownNames[i] + '"'] = true;
++            } else {
++              // The property is a number index.
++              names[ownNames[i]] = true;
++            }
++          }
+         }
+-        names[ownNames[i]] = true;
+       }
+     }
++    aObj = Object.getPrototypeOf(aObj);
+   }
+ 
+-  // We need to recursively go up the prototype chain.
+-  aObj = Object.getPrototypeOf(aObj);
+-  if (aObj !== null) {
+-    let parentScope = getMatchedProps(aObj, aMatchProp);
+-    for (let name in parentScope) {
+-      if (names[name] != true) {
+-        c--;
+-        if (c < 0) {
+-          return names;
+-        }
+-        names[name] = true;
+-      }
+-    }
+-  }
+   return names;
+ }
+ 
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_completion.js b/browser/devtools/webconsole/test/browser_webconsole_completion.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_completion.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_completion.js

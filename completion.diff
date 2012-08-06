@@ -1,12 +1,12 @@
 # HG changeset patch
-# Parent 70feaa326dc77f88dcb12c4ee90e82cafdefce6f
+# Parent 3be16ef4842ed40dd7ed115b8a9badeb29d1e6a7
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
 Bug 762164 — Implement Autocompletion in the Source Editor
 
 diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratchpad/scratchpad.js
 --- a/browser/devtools/scratchpad/scratchpad.js
 +++ b/browser/devtools/scratchpad/scratchpad.js
-@@ -362,6 +362,22 @@ var Scratchpad = {
+@@ -400,6 +400,22 @@ var Scratchpad = {
    },
  
    /**
@@ -29,7 +29,7 @@ diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratc
     * Execute the selected text (if any) or the entire editor content in the
     * current context.
     * @return mixed
-@@ -981,11 +997,13 @@ var Scratchpad = {
+@@ -1041,11 +1057,13 @@ var Scratchpad = {
  
      this.editor = new SourceEditor();
  
@@ -43,6 +43,48 @@ diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratc
      };
  
      let editorPlaceholder = document.getElementById("scratchpad-editor");
+diff --git a/browser/devtools/scratchpad/test/Makefile.in b/browser/devtools/scratchpad/test/Makefile.in
+--- a/browser/devtools/scratchpad/test/Makefile.in
++++ b/browser/devtools/scratchpad/test/Makefile.in
+@@ -33,6 +33,7 @@ MOCHITEST_BROWSER_FILES = \
+ 		browser_scratchpad_bug_650760_help_key.js \
+ 		browser_scratchpad_bug_651942_recent_files.js \
+ 		browser_scratchpad_bug756681_display_non_error_exceptions.js \
++		browser_scratchpad_bug_762164_autocompletion.js \
+ 		head.js \
+ 
+ include $(topsrcdir)/config/rules.mk
+diff --git a/browser/devtools/scratchpad/test/browser_scratchpad_bug_660560_tab.js b/browser/devtools/scratchpad/test/browser_scratchpad_bug_660560_tab.js
+--- a/browser/devtools/scratchpad/test/browser_scratchpad_bug_660560_tab.js
++++ b/browser/devtools/scratchpad/test/browser_scratchpad_bug_660560_tab.js
+@@ -36,22 +36,22 @@ function runTests()
+ 
+   is(sp.editor.getCaretOffset(), 5, "caret location is correct");
+ 
+-  sp.editor.setCaretOffset(6);
++  sp.editor.setCaretOffset(16);
+ 
+   EventUtils.synthesizeKey("VK_TAB", {}, gScratchpadWindow);
+ 
+-  is(sp.getText(), "     w    indow.foo;",
++  is(sp.getText(), "     window.foo;    ",
+      "Tab key added 4 spaces");
+ 
+-  is(sp.editor.getCaretOffset(), 10, "caret location is correct");
++  is(sp.editor.getCaretOffset(), 20, "caret location is correct");
+ 
+   // Test the new insertTextAtCaret() method.
+ 
+   sp.insertTextAtCaret("omg");
+ 
+-  is(sp.getText(), "     w    omgindow.foo;", "insertTextAtCaret() works");
++  is(sp.getText(), "     window.foo;    omg", "insertTextAtCaret() works");
+ 
+-  is(sp.editor.getCaretOffset(), 13, "caret location is correct after update");
++  is(sp.editor.getCaretOffset(), 23, "caret location is correct after update");
+ 
+   gScratchpadWindow.close();
+ 
 diff --git a/browser/devtools/sourceeditor/Makefile.in b/browser/devtools/sourceeditor/Makefile.in
 --- a/browser/devtools/sourceeditor/Makefile.in
 +++ b/browser/devtools/sourceeditor/Makefile.in

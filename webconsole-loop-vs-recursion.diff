@@ -1,0 +1,90 @@
+# HG changeset patch
+# Parent 3be16ef4842ed40dd7ed115b8a9badeb29d1e6a7
+# User Thaddee Tyl <thaddee.tyl@gmail.com>
+Bug 780564 — Perf improvement by using loops instead of recursion
+
+diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
+--- a/browser/devtools/webconsole/WebConsoleUtils.jsm
++++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
+@@ -996,51 +996,43 @@ function getMatchedProps(aObj, aOptions 
+   }
+   let c = MAX_COMPLETIONS;
+   let names = {};   // Using an Object to avoid duplicates.
+-  let ownNames = Object.getOwnPropertyNames(aObj);
+-  for (let i = 0; i < ownNames.length; i++) {
+-    // Filtering happens here.
+-    if (ownNames[i].indexOf(aOptions.matchProp) == 0) {
+-      // If we already have it in, no need to append it.
+-      if (names[ownNames[i]] != true &&
+-          +ownNames[i] != +ownNames[i]) {
+-        c--;
+-        if (c < 0) {
+-          return names;
+-        }
+-        if (aOptions.completeAfter[0] == ".") {
+-          // If it is an array index, we can't take it.
+-          // This uses a trick: converting a string to a number yields NaN if
+-          // the operation failed, and NaN is not equal to itself.
+-          if (+ownNames[i] != +ownNames[i]) {
+-            names[ownNames[i]] = true;
++
++  // We need to go up the prototype chain.
++  let ownNames = null;
++  while (aObj !== null) {
++    ownNames = Object.getOwnPropertyNames(aObj);
++    for (let i = 0; i < ownNames.length; i++) {
++      // Filtering happens here.
++      if (ownNames[i].indexOf(aOptions.matchProp) == 0) {
++        // If we already have it in, no need to append it.
++        if (names[ownNames[i]] != true &&
++            +ownNames[i] != +ownNames[i]) {
++          c--;
++          if (c < 0) {
++            return names;
+           }
+-        } else if (aOptions.completeAfter[0] == "[") {
+-          // See above for the following trick.
+-          if (+ownNames[i] != +ownNames[i]) {
+-            names['"' + ownNames[i] + '"'] = true;
+-          } else {
+-            // The property is a number index.
+-            names[ownNames[i]] = true;
++          if (aOptions.completeAfter[0] == ".") {
++            // If it is an array index, we can't take it.
++            // This uses a trick: converting a string to a number yields NaN if
++            // the operation failed, and NaN is not equal to itself.
++            if (+ownNames[i] != +ownNames[i]) {
++              names[ownNames[i]] = true;
++            }
++          } else if (aOptions.completeAfter[0] == "[") {
++            // See above for the following trick.
++            if (+ownNames[i] != +ownNames[i]) {
++              names['"' + ownNames[i] + '"'] = true;
++            } else {
++              // The property is a number index.
++              names[ownNames[i]] = true;
++            }
+           }
+         }
+       }
+     }
++    aObj = Object.getPrototypeOf(aObj);
+   }
+ 
+-  // We need to recursively go up the prototype chain.
+-  aObj = Object.getPrototypeOf(aObj);
+-  if (aObj !== null) {
+-    let parentScope = getMatchedProps(aObj, aOptions);
+-    for (let name in parentScope) {
+-      if (names[name] != true) {
+-        c--;
+-        if (c < 0) {
+-          return names;
+-        }
+-        names[name] = true;
+-      }
+-    }
+-  }
+   return names;
+ }
+ 

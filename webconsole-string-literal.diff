@@ -1,11 +1,11 @@
 # HG changeset patch
-# Parent 6b0278a6fa034f80e1aeb1ddc2e9c72098bee85c
+# Parent c6b8850b04e1d2113ef4b9f93306eefb12499d60
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
 
 diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
 --- a/browser/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
-@@ -909,48 +909,59 @@ function JSPropertyProvider(aScope, aInp
+@@ -909,48 +909,63 @@ function JSPropertyProvider(aScope, aInp
      return null;
    }
  
@@ -26,10 +26,14 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 -      if (obj == null) {
 -        return null;
 -      }
-+  if (completionPart[completionPart.length - 1] === "." &&
++  let lastDot = completionPart.lastIndexOf(".");
++  if (lastDot > 0 &&
++      (completionPart[lastDot - 1] === "'" ||
++       completionPart[lastDot - 1] === '"') &&
 +      (completionPart[0] === '"' || completionPart[0] === "'")) {
 +    // We are completing a string literal.
 +    obj = obj.String.prototype;
++    matchProp = completionPart.slice(lastDot + 1);
  
 -      // Check if prop is a getter function on obj. Functions can change other
 -      // stuff so we can't execute them to get the next object. Stop here.
@@ -101,3 +105,20 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
    }
  
    let matches = Object.keys(getMatchedProps(obj, {matchProp:matchProp}));
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_completion.js b/browser/devtools/webconsole/test/browser_webconsole_completion.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_completion.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_completion.js
+@@ -105,6 +105,13 @@ function testCompletion(hud) {
+ 
+   is(jsterm.completeNode.value, "              ice", "non-object completion");
+ 
++  // Test string literal autocompletion.
++  input.value = "'Asimov'.sl";
++  jsterm.complete(jsterm.COMPLETE_HINT_ONLY, testNext);
++  yield;
++
++  is(jsterm.completeNode.value, "           ice", "string literal completion");
++
+   testDriver = jsterm = input = null;
+   executeSoon(finishTest);
+   yield;

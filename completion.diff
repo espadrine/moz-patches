@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 3be16ef4842ed40dd7ed115b8a9badeb29d1e6a7
+# Parent 0b2bf6669f32716661af1e19917791f4890f3af9
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
 Bug 762164 — Implement Autocompletion in the Source Editor
 
@@ -100,7 +100,7 @@ diff --git a/browser/devtools/sourceeditor/autocompletion.jsm b/browser/devtools
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/sourceeditor/autocompletion.jsm
-@@ -0,0 +1,383 @@
+@@ -0,0 +1,441 @@
 +/* vim:set ts=2 sw=2 sts=2 et tw=80:
 + * This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -110,6 +110,7 @@ new file mode 100644
 +
 +const Cu = Components.utils;
 +Cu.import("resource:///modules/WebConsoleUtils.jsm");
++Cu.import("resource://gre/modules/reflect.jsm");
 +
 +var EXPORTED_SYMBOLS = ["Autocompletion"];
 +
@@ -204,6 +205,7 @@ new file mode 100644
 +  _end: 0,
 +  _acAddsText: false,
 +  _completion: null,
++  _staticCandidates: null,
 +
 +  // The following two properties are functions that need to be bound to this.
 +  _stopBound: null,
@@ -405,7 +407,7 @@ new file mode 100644
 +
 +
 +// Map from language file extensions to functions that can autocomplete the
-+// source editor, assuming that, for each function, |this| is an 
++// source editor, assuming that, for each function, |this| is an
 +// instance of Autocompletion.
 +const COMPLETERS = {
 +  /**
@@ -436,7 +438,30 @@ new file mode 100644
 +    // The candidates are simply concatenated, level after level.
 +    // We assume that Level 0 < Level 1 < etc.
 +
++    // Static analysis (Level 2).
++
++    let script = this.editor.getText();
++    let staticVariables = getStaticScope(script, caret.line, caret.column);
++    let staticCandidates = [];
++    if (staticVariables !== null) {
++      for (let p in staticVariables) {
++        staticCandidates.push(p);
++      }
++      // Sort them according to nearest scope.
++      staticCandidates.sort(function(a, b) {
++        return staticVariables[b] - staticVariables[a];
++      });
++      this._staticCandidates = staticCandidates;
++    }
++    candidates = candidates.concat(this._staticCandidates);
++    completions = completions.concat(
++      this._staticCandidates.map(function(comp, i) {
++        return comp.substr(matchProp.length);
++      })
++    );
++
 +    // Sandbox-based candidates (Level 1).
++
 +    if (this.getSandbox) {
 +      let sandboxCompletion = JSPropertyProvider(this.getSandbox(), root);
 +      if (sandboxCompletion) {
@@ -450,7 +475,8 @@ new file mode 100644
 +    }
 +
 +    // Keyword-based candidates (Level 0).
-+    const JSKeywords = [
++
++    const keywords = [
 +      "break", "case", "catch", /* "class", */ "const", "continue", "debugger",
 +      "default", "delete", "do", "else", "export", "false", "finally", "for",
 +      "function", "get", "if", "import", "in", "instanceof", "let", "new",
@@ -461,13 +487,13 @@ new file mode 100644
 +    // Get all characters that may be the start of a keyword.
 +    for (; (root.length - i >= 0) && /^[a-zA-Z0-9$_]$/.test(root[root.length-i])
 +         ; i++) {}
-+    // |startKey|: What may be the start of a keyword, up until the cursor.
++    // startKey: What may be the start of a keyword, up until the cursor.
 +    let startKey = root.slice(root.length - i + 1);
 +    // This autocompletion is not meaningful when we type a property…
 +    if (root[root.length - i] != ".") {
 +      // Thou shalt only complete what there is to complete.
 +      if (startKey.length > 0) {
-+        for (let word of JSKeywords) {
++        for (let word of keywords) {
 +          if (word.indexOf(startKey) == 0) {
 +            candidates.push(word);
 +            completions.push(word.slice(startKey.length));
@@ -483,6 +509,38 @@ new file mode 100644
 +  },
 +};
 +
++
++
++
++/**
++ * TODO: documentation.
++ */
++function getStaticScope(script, line, column, store = {}, depth = 0) {
++  let tree;
++  if (script.constructor === String) {
++    try {
++      tree = Reflect.parse(script);
++    } catch(e) {
++      return null;
++    }
++  } else {
++    tree = script;
++  }
++
++  for (let k in tree) {
++    let p = tree[k];
++    if (p && typeof p === "object") {
++      if (p.type === "Identifier") {
++        store[p.name] = depth;
++      } else if (!(p.body && (p.loc.start.line > line ||
++          (p.loc.start.line === line && p.loc.start.column > column)))) {
++        getStaticScope(p, line, column, store, depth + 1);
++      }
++    }
++  }
++
++  return store;
++}
 +
 diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
 --- a/browser/devtools/sourceeditor/source-editor-orion.jsm

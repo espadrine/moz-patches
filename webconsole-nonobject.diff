@@ -15,7 +15,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
  
    return {
      matchProp: matchProp,
-@@ -962,51 +962,76 @@ function JSPropertyProvider(aScope, aInp
+@@ -962,51 +962,60 @@ function JSPropertyProvider(aScope, aInp
  }
  
  /**
@@ -36,21 +36,15 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 + *        Options that the algorithm takes.
 + *        - matchProp (string): Filter for properties that match this one.
 + *          Defaults to the empty string (which always matches).
-+ *        - completeAfter (string): Character after which we are getting the
-+ *          properties. Should be either "." or "[". Chooses how the properties
-+ *          should look: "." gives the string directly, and doesn't give number
-+ *          indices, whereas "[" surrounds the properties with '"' and gives
-+ *          number indices.
   *
   * @return object
   *         Object whose keys are all accessible properties on the object.
   */
 -function getMatchedProps(aObj, aMatchProp = "")
-+function getMatchedProps(aObj, aOptions = {matchProp: "", completeAfter: "."})
++function getMatchedProps(aObj, aOptions = {matchProp: ""})
  {
 +  // Argument defaults.
 +  aOptions.matchProp = aOptions.matchProp || "";
-+  aOptions.completeAfter = aOptions.completeAfter || ".";
 +
 +  if (aObj == null) { return {}; }
 +  try {
@@ -67,6 +61,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 -        c--;
 -        if (c < 0) {
 -          return names;
+-        }
 +
 +  // We need to go up the prototype chain.
 +  let ownNames = null;
@@ -74,31 +69,20 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 +    ownNames = Object.getOwnPropertyNames(aObj);
 +    for (let i = 0; i < ownNames.length; i++) {
 +      // Filtering happens here.
-+      if (ownNames[i].indexOf(aOptions.matchProp) == 0) {
-+        // If we already have it in, no need to append it.
-+        if (names[ownNames[i]] != true) {
-+          c--;
-+          if (c < 0) {
-+            return names;
-+          }
-+          if (aOptions.completeAfter[0] == ".") {
-+            // If it is an array index, we can't take it.
-+            // This uses a trick: converting a string to a number yields NaN if
-+            // the operation failed, and NaN is not equal to itself.
-+            if (+ownNames[i] != +ownNames[i]) {
-+              names[ownNames[i]] = true;
-+            }
-+          } else if (aOptions.completeAfter[0] == "[") {
-+            // See above for the following trick.
-+            if (+ownNames[i] != +ownNames[i]) {
-+              names['"' + ownNames[i] + '"'] = true;
-+            } else {
-+              // The property is a number index.
-+              names[ownNames[i]] = true;
-+            }
-+          }
-         }
--        names[ownNames[i]] = true;
++      // If we already have it in, no need to append it.
++      if (ownNames[i].indexOf(aOptions.matchProp) != 0 ||
++          names[ownNames[i]] == true) {
++        continue;
++      }
++      c--;
++      if (c < 0) {
++        return names;
++      }
++      // If it is an array index, we can't take it.
++      // This uses a trick: converting a string to a number yields NaN if
++      // the operation failed, and NaN is not equal to itself.
++      if (+ownNames[i] != +ownNames[i]) {
+         names[ownNames[i]] = true;
        }
      }
 +    aObj = Object.getPrototypeOf(aObj);
@@ -121,6 +105,49 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
    return names;
  }
  
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js b/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
+@@ -195,7 +195,7 @@ function testReturnKey()
+ 
+       ok(!completeNode.value, "completeNode is empty");
+ 
+-      executeSoon(finishTest);
++      dontShowArrayNumbers();
+     }, false);
+ 
+     EventUtils.synthesizeKey("VK_RETURN", {});
+@@ -207,3 +207,30 @@ function testReturnKey()
+     EventUtils.synthesizeKey(".", {});
+   });
+ }
++
++function dontShowArrayNumbers()
++{
++  content.wrappedJSObject.foobarBug585991 = ["Sherlock Holmes"];
++
++  let jsterm = HUD.jsterm;
++  let popup = jsterm.autocompletePopup;
++  let completeNode = jsterm.completeNode;
++
++  popup._panel.addEventListener("popupshown", function onShown() {
++    popup._panel.removeEventListener("popupshown", onShown, false);
++
++    let sameItems = popup.getItems().map(function(e) {return e.label;});
++    ok(!sameItems.some(function(prop, index) { prop === "0"; }),
++       "Completing on an array doesn't show numbers.");
++
++    popup._panel.addEventListener("popuphidden", consoleOpened, false);
++
++    EventUtils.synthesizeKey("VK_TAB", {});
++
++    executeSoon(finishTest);
++  }, false);
++
++  jsterm.setInputValue("window.foobarBug585991");
++  EventUtils.synthesizeKey(".", {});
++}
++
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_completion.js b/browser/devtools/webconsole/test/browser_webconsole_completion.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_completion.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_completion.js

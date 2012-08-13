@@ -1,6 +1,7 @@
 # HG changeset patch
-# Parent c6b8850b04e1d2113ef4b9f93306eefb12499d60
+# Parent 36dc337b68c19862942894bac5168fd03a163a74
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
+Bug 780791 — Autocompletion of string literals
 
 diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
 --- a/browser/devtools/webconsole/WebConsoleUtils.jsm
@@ -28,9 +29,8 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 -      }
 +  let lastDot = completionPart.lastIndexOf(".");
 +  if (lastDot > 0 &&
-+      (completionPart[lastDot - 1] === "'" ||
-+       completionPart[lastDot - 1] === '"') &&
-+      (completionPart[0] === '"' || completionPart[0] === "'")) {
++      (completionPart[0] == "'" || completionPart[0] == '"') &&
++      completionPart[lastDot - 1] == completionPart[0]) {
 +    // We are completing a string literal.
 +    obj = obj.String.prototype;
 +    matchProp = completionPart.slice(lastDot + 1);
@@ -45,7 +45,8 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 -      }
 -      catch (ex) {
 -        return null;
-+  } else {
++  }
++  else {
 +    // We are completing a variable / a property lookup.
 +
 +    let properties = completionPart.split(".");

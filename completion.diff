@@ -85,6 +85,59 @@ diff --git a/browser/devtools/scratchpad/test/browser_scratchpad_bug_660560_tab.
  
    gScratchpadWindow.close();
  
+diff --git a/browser/devtools/scratchpad/test/browser_scratchpad_bug_762164_autocompletion.js b/browser/devtools/scratchpad/test/browser_scratchpad_bug_762164_autocompletion.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/scratchpad/test/browser_scratchpad_bug_762164_autocompletion.js
+@@ -0,0 +1,48 @@
++/* vim: set ts=2 et sw=2 tw=80: */
++/* Any copyright is dedicated to the Public Domain.
++   http://creativecommons.org/publicdomain/zero/1.0/ */
++
++function test() {
++  waitForExplicitFinish();
++
++  gBrowser.selectedTab = gBrowser.addTab();
++  gBrowser.selectedBrowser.addEventListener("load", function onTabLoad() {
++    gBrowser.selectedBrowser.removeEventListener("load", onTabLoad, true);
++
++    ok(window.Scratchpad, "Scratchpad variable exists");
++
++    Services.prefs.setIntPref("devtools.editor.tabsize", 5);
++
++    openScratchpad(runTests);
++  }, true);
++
++  content.location = "data:text/html,Scratchpad test for the Tab key, bug 660560";
++}
++
++function runTests() {
++  // 1. Test automatic insertion.
++
++  let sp = gScratchpadWindow.Scratchpad;
++
++  sp.setText("window.O");
++  // Position the cursor after the "O".
++  sp.editor.setCaretOffset(8);
++
++  EventUtils.synthesizeKey("VK_TAB", {}, gScratchpadWindow);
++
++  is(sp.getText(), "window.Object",
++     "Autocompletion of window.O → window.Object");
++
++  // 2. Test the existence of the popover.
++
++  sp.setText("window.F");
++  sp.editor.setCaretOffset(8);
++
++  EventUtils.synthesizeKey("VK_TAB", {}, gScratchpadWindow);
++
++  let popover = sp.editor._autocomplete.popover;
++  is(popover.style.display, "block",
++     "Autocompletion of window.F gives a popover");
++
++  finish();
++}
 diff --git a/browser/devtools/sourceeditor/Makefile.in b/browser/devtools/sourceeditor/Makefile.in
 --- a/browser/devtools/sourceeditor/Makefile.in
 +++ b/browser/devtools/sourceeditor/Makefile.in

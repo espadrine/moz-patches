@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 0b2bf6669f32716661af1e19917791f4890f3af9
+# Parent cc01d785bb1cce8f378e61bc4ece267955af68ad
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
 Bug 762164 — Implement Autocompletion in the Source Editor
 
@@ -100,7 +100,7 @@ diff --git a/browser/devtools/sourceeditor/autocompletion.jsm b/browser/devtools
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/sourceeditor/autocompletion.jsm
-@@ -0,0 +1,441 @@
+@@ -0,0 +1,587 @@
 +/* vim:set ts=2 sw=2 sts=2 et tw=80:
 + * This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -172,8 +172,9 @@ new file mode 100644
 +  // The function we use to autocomplete.
 +  this.complete = COMPLETERS[ed._mode];
 +
-+  // The following will popup the autocompletion popover on each character!
-+  this.editor.addEventListener("TextChanged", function() {
++  // The following will fire the autocompletion system on each character!
++  this.editor.editorElement.addEventListener("keydown", function(e) {
++    this._lastKey = e.keyCode;
 +    if (!this._acAddsText) {
 +      this.document.defaultView.setTimeout(this.displayCompletion.bind(this),0);
 +    }
@@ -210,6 +211,7 @@ new file mode 100644
 +  // The following two properties are functions that need to be bound to this.
 +  _stopBound: null,
 +  _keyBindingsBound: null,
++  _lastKey: null,
 +
 +  /**
 +   * Show the completions that are asked for.
@@ -438,27 +440,35 @@ new file mode 100644
 +    // The candidates are simply concatenated, level after level.
 +    // We assume that Level 0 < Level 1 < etc.
 +
++    let source = this.editor.getText();
++    let matchProp = getIdentifier(source, this.editor.getCaretOffset());
++
 +    // Static analysis (Level 2).
 +
-+    let script = this.editor.getText();
-+    let staticVariables = getStaticScope(script, caret.line, caret.column);
-+    let staticCandidates = [];
-+    if (staticVariables !== null) {
-+      for (let p in staticVariables) {
-+        staticCandidates.push(p);
-+      }
-+      // Sort them according to nearest scope.
-+      staticCandidates.sort(function(a, b) {
-+        return staticVariables[b] - staticVariables[a];
-+      });
-+      this._staticCandidates = staticCandidates;
++    // Only do this (possibly expensive) operation once every new line (\n = 13)
++    if (this._staticCandidates == null || this._lastKey == 13) {
++      this._staticCandidates = getStaticScope(source, caret.line, caret.column) || {};
 +    }
-+    candidates = candidates.concat(this._staticCandidates);
-+    completions = completions.concat(
-+      this._staticCandidates.map(function(comp, i) {
-+        return comp.substr(matchProp.length);
-+      })
-+    );
++    // Right now, we can only complete variables.
++    if (matchProp.indexOf(".") == -1 && matchProp.indexOf("[") == -1 &&
++        // Thou shalt only complete what there is to complete.
++        matchProp.length !== 0) {
++      let staticCandidates = {};
++      for (let candidate in this._staticCandidates) {
++        if (candidate.indexOf(matchProp) === 0) {
++          staticCandidates[candidate] = 1;
++        }
++      }
++      let self = this;
++      let ourCandidates = Object.keys(staticCandidates).sort(function(a, b) {
++        // Sort them according to nearest scope.
++        return self._staticCandidates[b] - self._staticCandidates[a];
++      });
++      candidates = candidates.concat(ourCandidates);
++      completions = completions.concat(ourCandidates.map(function(candidate) {
++        return candidate.slice(matchProp.length);
++      }));
++    }
 +
 +    // Sandbox-based candidates (Level 1).
 +
@@ -467,8 +477,8 @@ new file mode 100644
 +      if (sandboxCompletion) {
 +        candidates = candidates.concat(sandboxCompletion.matches);
 +        completions = completions.concat(
-+          sandboxCompletion.matches.map(function(comp, i) {
-+            return comp.substr(sandboxCompletion.matchProp.length);
++          sandboxCompletion.matches.map(function(candidate) {
++            return candidate.slice(sandboxCompletion.matchProp.length);
 +          })
 +        );
 +      }
@@ -483,21 +493,14 @@ new file mode 100644
 +      "null", "of", "return", "set", "super", "switch", "this", "true", "throw",
 +      "try", "typeof", "undefined", "var", "void", "while", "with",
 +    ];
-+    let i = 1;
-+    // Get all characters that may be the start of a keyword.
-+    for (; (root.length - i >= 0) && /^[a-zA-Z0-9$_]$/.test(root[root.length-i])
-+         ; i++) {}
-+    // startKey: What may be the start of a keyword, up until the cursor.
-+    let startKey = root.slice(root.length - i + 1);
 +    // This autocompletion is not meaningful when we type a property…
-+    if (root[root.length - i] != ".") {
-+      // Thou shalt only complete what there is to complete.
-+      if (startKey.length > 0) {
-+        for (let word of keywords) {
-+          if (word.indexOf(startKey) == 0) {
-+            candidates.push(word);
-+            completions.push(word.slice(startKey.length));
-+          }
++    if (matchProp.indexOf(".") == -1 && matchProp.indexOf("[") == -1 &&
++        // Thou shalt only complete what there is to complete.
++        matchProp.length !== 0) {
++      for (let keyword of keywords) {
++        if (keyword.indexOf(matchProp) == 0) {
++          candidates.push(keyword);
++          completions.push(keyword.slice(matchProp.length));
 +        }
 +      }
 +    }
@@ -511,9 +514,40 @@ new file mode 100644
 +
 +
 +
++/**
++ * Some error messages from the parser can be recovered from.
++ */
++const RECOVER = {
++  "missing } after property list": function(script, offset) {
++  },
++};
++
++
++
++// Below this point are helper functions.
++
++
 +
 +/**
-+ * TODO: documentation.
++ * Get all the variables in a JS script at a certain position.
++ *
++ * @param string script
++ *        The JS script to parse.
++ * @param number line
++ *        The line in the script from which we want the scope.
++ * @param number column
++ *        The column in the script from which we want the scope.
++ *
++ * @param object store
++ *        (Optional) The object we return. Use to avoid allocation.
++ * @param number depth
++ *        (Optional) A starting point for indicating how deeply nested variables
++ *        are.
++ *
++ * @return object
++ *         A map from all variable names to a number reflecting how deeply
++ *         nested in the scope the variable was. A bigger number reflects a more
++ *         deeply nested variable.
 + */
 +function getStaticScope(script, line, column, store = {}, depth = 0) {
 +  let tree;
@@ -540,6 +574,118 @@ new file mode 100644
 +  }
 +
 +  return store;
++}
++
++
++
++// States.
++// IDEN can be things like |foo[bar].baz|.
++const IDEN     = 1; // identifier
++const REGEX    = 2; // regular expression
++const COMMENT  = 3; // comment
++
++// Relevant character codes.
++// May be used as states.
++const ETHER   = 0;  // ∅
++const QUOTE   = 39; // '
++const DQUOTE  = 34; // "
++const BSLASH  = 92; // \
++const SLASH   = 47; // /
++const STAR    = 42; // *
++const LF      = 10; // \n
++const BRACK   = 91; // [
++const CBRACK  = 93; // ]
++
++// Compiled '>=!|<+-&*%^/{}()[];,~?:\\/\'"' to a map.
++const PUNCTUATION = {62:1, 61:1, 33:1, 124:1, 60:1, 43:1, 45:1, 38:1, 42:1, 37:1, 94:1, 47:1, 123:1, 125:1, 40:1, 41:1, 91:1, 93:1, 59:1, 44:1, 126:1, 63:1, 58:1, 92:1, 39:1, 34:1};
++
++function findIdentifier(source, offset = source.length) {
++  // Find beginning of line.
++  let bol = offset;
++  for (;source[bol] !== "\n" && source[bol] !== "\u2028" && source[bol] !== "\u2029"
++       && bol != -1;
++       bol--) {}
++  bol++;    // Set it to the first char of the line.
++
++  // Keep track of the beginning of the object.
++  let boo = bol;
++
++  let inBrackets = false;
++  function setState(newState) {
++    if (!inBrackets)  { boo = i; }
++    state = newState;
++  }
++
++  let i, c, state = ETHER;
++  for (i = bol; i < offset && source[i]; i++) {
++    c = source[i].charCodeAt(0);
++    if (state == ETHER) {
++      if (c == QUOTE || c == DQUOTE || c == SLASH)  { setState(c); }
++      // Unicode identifiers, eg. |var \u0042 = 42;|.
++      else if (c == BSLASH)  { setState(IDEN); i += 5; }
++      else if (// Non-ascii chars are identifiers, but three codes.
++               (c > 128 && c != 0xffff && c != 0x2028 && c != 0x2029) ||
++               // Letters (uppercase, lowercase) are identifier chars.
++               (c > 0x40 && c < 0x5b) || (c > 0x60 && c < 0x7b) ||
++               // $ and _ are identifier chars.
++               c == 0x5f || c == 0x24) {
++        setState(IDEN);
++      } else if (inBrackets && c == CBRACK) {
++        setState(IDEN);
++        inBrackets = false;
++      }
++    } else if (state == QUOTE || state == DQUOTE) {
++      if (c == BSLASH)  { i++; }
++      else if (state == c)  { setState(ETHER); }
++    } else if (state == SLASH) {
++      if (c == SLASH)  { setState(COMMENT); }
++      else if (c == STAR) {
++        // Go fast to the end of the comment.
++        setState(ETHER);
++        i = source.slice(i, offset).indexOf("*/") + 2;
++        // If we currently are in a comment, say it.
++        if (i < 0) {
++          setState(COMMENT);
++          i = offset;
++        }
++      }
++      else  { setState(REGEX); }
++    } else if (state == COMMENT) {
++      if (c == LF || c == 0x2028 || c == 0x2029)  { setState(ETHER); }
++    } else if (state == REGEX) {
++      if (c == BSLASH)  { i++; }
++      else if (c == SLASH)  { setState(ETHER); }
++    } else if (state == IDEN) {
++      if (c == BRACK) {
++        inBrackets = true;
++        setState(ETHER);
++      } else if (PUNCTUATION[c]) {
++        setState(ETHER);
++      }
++    }
++  }
++
++  return {
++    state: state,
++    index: boo,
++  };
++}
++
++function getIdentifier(source, offset = source.length) {
++  // Remove the completion character.
++  source = source.slice(0, offset).trim();
++  let complChar = source.slice(-1);
++
++  if (complChar === "." || complChar === "[") {
++    source = source.slice(0, -1);
++    if (offset > source.length)  { offset = source.length; }
++  }
++
++  // Locate the identifier we read.
++  let f = findIdentifier(source, offset);
++  if (f.state == IDEN) {
++    return source.slice(f.index, offset);
++  } else return "";
 +}
 +
 diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm

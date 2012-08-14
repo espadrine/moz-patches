@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent cc01d785bb1cce8f378e61bc4ece267955af68ad
+# Parent 1cd521c380451c28bcb0d01b25330e16813ffdbd
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
 Bug 762164 — Implement Autocompletion in the Source Editor
 
@@ -153,7 +153,7 @@ diff --git a/browser/devtools/sourceeditor/autocompletion.jsm b/browser/devtools
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/sourceeditor/autocompletion.jsm
-@@ -0,0 +1,587 @@
+@@ -0,0 +1,636 @@
 +/* vim:set ts=2 sw=2 sts=2 et tw=80:
 + * This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -505,13 +505,16 @@ new file mode 100644
 +    // Right now, we can only complete variables.
 +    if (matchProp.indexOf(".") == -1 && matchProp.indexOf("[") == -1 &&
 +        // Thou shalt only complete what there is to complete.
-+        matchProp.length !== 0) {
++        matchProp.length != 0) {
 +      let staticCandidates = {};
 +      for (let candidate in this._staticCandidates) {
-+        if (candidate.indexOf(matchProp) === 0) {
-+          staticCandidates[candidate] = 1;
++        // The candidate must match and have something to add!
++        if (candidate.indexOf(matchProp) == 0
++            && candidate.length > matchProp.length) {
++          staticCandidates[candidate] = this._staticCandidates[candidate];
 +        }
 +      }
++      dump('espadrine: candidates ' + JSON.stringify(staticCandidates) + '\n')
 +      let self = this;
 +      let ourCandidates = Object.keys(staticCandidates).sort(function(a, b) {
 +        // Sort them according to nearest scope.
@@ -551,7 +554,9 @@ new file mode 100644
 +        // Thou shalt only complete what there is to complete.
 +        matchProp.length !== 0) {
 +      for (let keyword of keywords) {
-+        if (keyword.indexOf(matchProp) == 0) {
++        // The keyword must match and have something to add!
++        if (keyword.indexOf(matchProp) == 0
++            && keyword.length > matchProp.length) {
 +          candidates.push(keyword);
 +          completions.push(keyword.slice(matchProp.length));
 +        }
@@ -565,15 +570,6 @@ new file mode 100644
 +  },
 +};
 +
-+
-+
-+/**
-+ * Some error messages from the parser can be recovered from.
-+ */
-+const RECOVER = {
-+  "missing } after property list": function(script, offset) {
-+  },
-+};
 +
 +
 +
@@ -603,32 +599,72 @@ new file mode 100644
 + *         deeply nested variable.
 + */
 +function getStaticScope(script, line, column, store = {}, depth = 0) {
-+  let tree;
-+  if (script.constructor === String) {
-+    try {
-+      tree = Reflect.parse(script);
-+    } catch(e) {
-+      return null;
-+    }
-+  } else {
-+    tree = script;
-+  }
++  let tree = script.constructor === String? Reflect.parse(script): script;
 +
-+  for (let k in tree) {
-+    let p = tree[k];
-+    if (p && typeof p === "object") {
-+      if (p.type === "Identifier") {
-+        store[p.name] = depth;
-+      } else if (!(p.body && (p.loc.start.line > line ||
-+          (p.loc.start.line === line && p.loc.start.column > column)))) {
-+        getStaticScope(p, line, column, store, depth + 1);
++  let node = tree;
++  let stack = [];
++  let index = 0;
++  let indices = [];
++  let goDeeper;
++  do {
++    goDeeper = false;
++    let statements = node.alternate? [node.consequent, node.alternate]:
++                     node.consequent? [node.consequent]:
++                     node.body;
++    for (; index < statements.length; index++) {
++      let subnode = statements[index];
++      if (subnode.type == "VariableDeclaration") {
++        declarations(subnode.declarations, line, column).forEach(function (e) {
++          store[e] = stack.length;
++        });
++      } else if (subnode.type == "FunctionDeclaration") {
++        store[subnode.id.name] = stack.length;
++        // TODO: get the argument names.
++        // Function declaration has a body in a body.
++        subnode = subnode.body;
++      }
++      if ((subnode.body || subnode.consequent) && caretInBlock(statements, index, line, column)) {
++        // Go one level deeper.
++        stack.push(node);
++        node = subnode;
++        indices.push(index + 1);
++        index = 0;
++        goDeeper = true;
++        break;
 +      }
 +    }
-+  }
++    if (!goDeeper) {
++      node = stack.pop();
++      index = indices.pop();
++    }
++  } while (stack.length > 0 || (node && index < node.body.length) || goDeeper);
 +
 +  return store;
 +}
 +
++function caretInBlock(statements, index, line, column) {
++  if (!statements[index + 1] ||
++      (!afterCaret(statements[index], line, column) &&
++       afterCaret(statements[index + 1], line, column))) {
++    return true;
++  } else {
++    return false;
++  }
++}
++
++function declarations(node, line, column) {
++  let identifiers = [];
++  for (let i = 0; i < node.length; i++) {
++    identifiers.push(node[i].id.name);
++  }
++  return identifiers;
++}
++
++function afterCaret(node, line, column) {
++  return node.loc.start.line > line ||
++         (node.loc.start.line === line &&
++          node.loc.start.column > column);
++}
 +
 +
 +// States.
@@ -652,7 +688,20 @@ new file mode 100644
 +// Compiled '>=!|<+-&*%^/{}()[];,~?:\\/\'"' to a map.
 +const PUNCTUATION = {62:1, 61:1, 33:1, 124:1, 60:1, 43:1, 45:1, 38:1, 42:1, 37:1, 94:1, 47:1, 123:1, 125:1, 40:1, 41:1, 91:1, 93:1, 59:1, 44:1, 126:1, 63:1, 58:1, 92:1, 39:1, 34:1};
 +
-+function findIdentifier(source, offset = source.length) {
++/**
++ * Behold the line parser!
++ *
++ * @param string source
++ *        Some JS code.
++ * @param number offset
++ *        The position of a caret, the line on which it is positioned we will
++ *        parse.
++ *
++ * @return object
++ *         - state: The state in which we end up.
++ *         - index: The offset of the start of the element we last parsed.
++ */
++function lineParser(source, offset = source.length) {
 +  // Find beginning of line.
 +  let bol = offset;
 +  for (;source[bol] !== "\n" && source[bol] !== "\u2028" && source[bol] !== "\u2029"
@@ -735,7 +784,7 @@ new file mode 100644
 +  }
 +
 +  // Locate the identifier we read.
-+  let f = findIdentifier(source, offset);
++  let f = lineParser(source, offset);
 +  if (f.state == IDEN) {
 +    return source.slice(f.index, offset);
 +  } else return "";

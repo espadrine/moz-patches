@@ -153,7 +153,7 @@ diff --git a/browser/devtools/sourceeditor/autocompletion.jsm b/browser/devtools
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/sourceeditor/autocompletion.jsm
-@@ -0,0 +1,656 @@
+@@ -0,0 +1,686 @@
 +/* vim:set ts=2 sw=2 sts=2 et tw=80:
 + * This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -494,7 +494,7 @@ new file mode 100644
 +    // We assume that Level 0 < Level 1 < etc.
 +
 +    let source = this.editor.getText();
-+    let matchProp = getIdentifier(source, this.editor.getCaretOffset());
++    let identifier = getIdentifier(source, this.editor.getCaretOffset());
 +
 +    // Static analysis (Level 2).
 +
@@ -504,14 +504,14 @@ new file mode 100644
 +                               this._staticCandidates;
 +    }
 +    // Right now, we can only complete variables.
-+    if (matchProp.indexOf(".") == -1 && matchProp.indexOf("[") == -1 &&
++    if (identifier.indexOf(".") == -1 && identifier.indexOf("[") == -1 &&
 +        // Thou shalt only complete what there is to complete.
-+        matchProp.length != 0) {
++        identifier.length != 0) {
 +      let staticCandidates = {};
 +      for (let candidate in this._staticCandidates) {
 +        // The candidate must match and have something to add!
-+        if (candidate.indexOf(matchProp) == 0
-+            && candidate.length > matchProp.length) {
++        if (candidate.indexOf(identifier) == 0
++            && candidate.length > identifier.length) {
 +          staticCandidates[candidate] = this._staticCandidates[candidate];
 +        }
 +      }
@@ -522,7 +522,7 @@ new file mode 100644
 +      });
 +      candidates = candidates.concat(ourCandidates);
 +      completions = completions.concat(ourCandidates.map(function(candidate) {
-+        return candidate.slice(matchProp.length);
++        return candidate.slice(identifier.length);
 +      }));
 +    }
 +
@@ -550,15 +550,15 @@ new file mode 100644
 +      "try", "typeof", "undefined", "var", "void", "while", "with",
 +    ];
 +    // This autocompletion is not meaningful when we type a property…
-+    if (matchProp.indexOf(".") == -1 && matchProp.indexOf("[") == -1 &&
++    if (identifier.indexOf(".") == -1 && identifier.indexOf("[") == -1 &&
 +        // Thou shalt only complete what there is to complete.
-+        matchProp.length !== 0) {
++        identifier.length !== 0) {
 +      for (let keyword of keywords) {
 +        // The keyword must match and have something to add!
-+        if (keyword.indexOf(matchProp) == 0
-+            && keyword.length > matchProp.length) {
++        if (keyword.indexOf(identifier) == 0
++            && keyword.length > identifier.length) {
 +          candidates.push(keyword);
-+          completions.push(keyword.slice(matchProp.length));
++          completions.push(keyword.slice(identifier.length));
 +        }
 +      }
 +    }
@@ -690,8 +690,9 @@ new file mode 100644
 +// States.
 +// IDEN can be things like |foo[bar].baz|.
 +const IDEN     = 1; // identifier
-+const REGEX    = 2; // regular expression
-+const COMMENT  = 3; // comment
++const IDEN_SP  = 2; // special chars in identifiers (spaces, dots, brackets).
++const REGEX    = 3; // regular expression
++const COMMENT  = 4; // comment
 +
 +// Relevant character codes.
 +// May be used as states.
@@ -702,6 +703,7 @@ new file mode 100644
 +const SLASH   = 47; // /
 +const STAR    = 42; // *
 +const LF      = 10; // \n
++const DOT     = 46; // .
 +const BRACK   = 91; // [
 +const CBRACK  = 93; // ]
 +
@@ -732,9 +734,9 @@ new file mode 100644
 +  // Keep track of the beginning of the object.
 +  let boo = bol;
 +
-+  let inBrackets = false;
++  let retain = false;
 +  function setState(newState) {
-+    if (!inBrackets)  { boo = i; }
++    if (!retain)  { boo = i; }
 +    state = newState;
 +  }
 +
@@ -745,16 +747,11 @@ new file mode 100644
 +      if (c == QUOTE || c == DQUOTE || c == SLASH)  { setState(c); }
 +      // Unicode identifiers, eg. |var \u0042 = 42;|.
 +      else if (c == BSLASH)  { setState(IDEN); i += 5; }
-+      else if (// Non-ascii chars are identifiers, but three codes.
-+               (c > 128 && c != 0xffff && c != 0x2028 && c != 0x2029) ||
-+               // Letters (uppercase, lowercase) are identifier chars.
-+               (c > 0x40 && c < 0x5b) || (c > 0x60 && c < 0x7b) ||
-+               // $ and _ are identifier chars.
-+               c == 0x5f || c == 0x24) {
++      else if (isIdentifierChar(c)) {
 +        setState(IDEN);
-+      } else if (inBrackets && c == CBRACK) {
++      } else if (retain && c == CBRACK) {
 +        setState(IDEN);
-+        inBrackets = false;
++        retain = false;
 +      }
 +    } else if (state == QUOTE || state == DQUOTE) {
 +      if (c == BSLASH)  { i++; }
@@ -764,9 +761,9 @@ new file mode 100644
 +      else if (c == STAR) {
 +        // Go fast to the end of the comment.
 +        setState(ETHER);
-+        i = source.slice(i, offset).indexOf("*/") + 2;
++        i += source.slice(i, offset).indexOf("*/") + 2;
 +        // If we currently are in a comment, say it.
-+        if (i < 0) {
++        if (i < 2) {
 +          setState(COMMENT);
 +          i = offset;
 +        }
@@ -778,10 +775,27 @@ new file mode 100644
 +      if (c == BSLASH)  { i++; }
 +      else if (c == SLASH)  { setState(ETHER); }
 +    } else if (state == IDEN) {
-+      if (c == BRACK) {
-+        inBrackets = true;
++      if (isWhiteSpace(c)) {
++        retain = true;
++        setState(IDEN_SP);
++      } else if (c == BRACK) {
++        retain = true;
 +        setState(ETHER);
 +      } else if (PUNCTUATION[c]) {
++        setState(ETHER);
++      }
++    } else if (state == IDEN_SP) {
++      // This state starts with retain = true.
++      if (c == DOT) {
++        setState(IDEN);
++        retain = false;
++      } else if (c == BRACK) {
++        setState(ETHER);
++      } else if (isIdentifierChar(c)) {
++        retain = false;
++        setState(IDEN);
++      } else if (PUNCTUATION[c]) {
++        retain = false;
 +        setState(ETHER);
 +      }
 +    }
@@ -791,6 +805,22 @@ new file mode 100644
 +    state: state,
 +    index: boo,
 +  };
++}
++
++function isWhiteSpace(c) {
++  return (c === 32) || (c === 0x0009) || (c === 0x000B) ||
++    (c === 0x000C) || (c === 0x00A0) ||
++    (c >= 0x1680 &&
++     [0x1680,0x180E,0x2000,0x2001,0x2002,0x2003,0x2004,0x2005,0x2006,0x2007,0x2008,0x2009,0x200A,0x202F,0x205F,0x3000,0xFEFF].indexOf(c) >= 0);
++}
++
++function isIdentifierChar(c) {
++  return (// Non-ascii chars are identifiers, but three codes.
++          (c > 128 && c != 0xffff && c != 0x2028 && c != 0x2029) ||
++          // Letters (uppercase, lowercase) are identifier chars.
++          (c > 0x40 && c < 0x5b) || (c > 0x60 && c < 0x7b) ||
++          // $ and _ are identifier chars.
++          c == 0x5f || c == 0x24);
 +}
 +
 +function getIdentifier(source, offset = source.length) {

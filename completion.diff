@@ -153,7 +153,7 @@ diff --git a/browser/devtools/sourceeditor/autocompletion.jsm b/browser/devtools
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/sourceeditor/autocompletion.jsm
-@@ -0,0 +1,636 @@
+@@ -0,0 +1,656 @@
 +/* vim:set ts=2 sw=2 sts=2 et tw=80:
 + * This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -500,7 +500,8 @@ new file mode 100644
 +
 +    // Only do this (possibly expensive) operation once every new line (\n = 13)
 +    if (this._staticCandidates == null || this._lastKey == 13) {
-+      this._staticCandidates = getStaticScope(source, caret.line, caret.column) || {};
++      this._staticCandidates = getStaticScope(source, caret.line + 1, caret.col) ||
++                               this._staticCandidates;
 +    }
 +    // Right now, we can only complete variables.
 +    if (matchProp.indexOf(".") == -1 && matchProp.indexOf("[") == -1 &&
@@ -514,7 +515,6 @@ new file mode 100644
 +          staticCandidates[candidate] = this._staticCandidates[candidate];
 +        }
 +      }
-+      dump('espadrine: candidates ' + JSON.stringify(staticCandidates) + '\n')
 +      let self = this;
 +      let ourCandidates = Object.keys(staticCandidates).sort(function(a, b) {
 +        // Sort them according to nearest scope.
@@ -579,6 +579,11 @@ new file mode 100644
 +
 +/**
 + * Get all the variables in a JS script at a certain position.
++ * This gathers variable (and argument) names by means of a static analysis
++ * which it performs on a parse tree of the code.
++ *
++ * This static scope system is inflexible. If it can't parse the code, it won't
++ * give you anything.
 + *
 + * @param string script
 + *        The JS script to parse.
@@ -593,77 +598,92 @@ new file mode 100644
 + *        (Optional) A starting point for indicating how deeply nested variables
 + *        are.
 + *
-+ * @return object
++ * @return object|null
 + *         A map from all variable names to a number reflecting how deeply
 + *         nested in the scope the variable was. A bigger number reflects a more
 + *         deeply nested variable.
++ *         We return null if we could not parse the code.
 + */
 +function getStaticScope(script, line, column, store = {}, depth = 0) {
-+  let tree = script.constructor === String? Reflect.parse(script): script;
++  let tree;
++  try {
++    tree = Reflect.parse(script);
++  } catch (e) { return null; }
 +
-+  let node = tree;
++  let node = tree.body;
 +  let stack = [];
 +  let index = 0;
 +  let indices = [];
-+  let goDeeper;
++  let deeper = null;
 +  do {
-+    goDeeper = false;
-+    let statements = node.alternate? [node.consequent, node.alternate]:
-+                     node.consequent? [node.consequent]:
-+                     node.body;
-+    for (; index < statements.length; index++) {
-+      let subnode = statements[index];
++    deeper = null;
++    for (; index < node.length; index++) {
++      let subnode = node[index];
 +      if (subnode.type == "VariableDeclaration") {
-+        declarations(subnode.declarations, line, column).forEach(function (e) {
-+          store[e] = stack.length;
-+        });
++        declarations(subnode.declarations, store, stack.length);
 +      } else if (subnode.type == "FunctionDeclaration") {
 +        store[subnode.id.name] = stack.length;
-+        // TODO: get the argument names.
-+        // Function declaration has a body in a body.
-+        subnode = subnode.body;
++        if (caretInBlock(subnode, line, column)) {
++          // Parameters are one level deeper than the function's name itself.
++          argumentNames(subnode.params, store, stack.length + 1);
++        }
 +      }
-+      if ((subnode.body || subnode.consequent) && caretInBlock(statements, index, line, column)) {
-+        // Go one level deeper.
++      deeper = nestedBody(subnode);
++      if (deeper && caretInBlock(subnode, line, column)) {
++        // We need to go deeper.
 +        stack.push(node);
-+        node = subnode;
++        node = deeper;
 +        indices.push(index + 1);
 +        index = 0;
-+        goDeeper = true;
 +        break;
-+      }
++      } else deeper = null;
 +    }
-+    if (!goDeeper) {
++    if (!deeper) {
 +      node = stack.pop();
 +      index = indices.pop();
 +    }
-+  } while (stack.length > 0 || (node && index < node.body.length) || goDeeper);
++  } while (stack.length > 0 || (node && index < node.length) || !!deeper);
 +
 +  return store;
 +}
 +
-+function caretInBlock(statements, index, line, column) {
-+  if (!statements[index + 1] ||
-+      (!afterCaret(statements[index], line, column) &&
-+       afterCaret(statements[index + 1], line, column))) {
-+    return true;
-+  } else {
-+    return false;
-+  }
++function nestedBody(node) {
++  if (node.body) {
++    if (node.body.body) {
++      // Function declaration has a body in a body.
++      return node.body.body;
++    } else {
++      return node.body;
++    }
++  } else if (node.consequent) {
++    return node.consequent.body;  // If statements.
++  } else if (node.alternate) {
++    return node.alternate.body;  // If/else statements.
++  } else return null;
 +}
 +
-+function declarations(node, line, column) {
-+  let identifiers = [];
++function caretInBlock(node, line, column) {
++  return (
++    // The node starts before the cursor.
++    (node.loc.start.line < line ||
++     (node.loc.start.line === line &&
++      node.loc.start.column <= column)) &&
++    // The node ends after the cursor.
++    (line < node.loc.end.line ||
++     (node.loc.end.line === line &&
++      column <= node.loc.end.column)));
++}
++
++function declarations(node, store, weight) {
 +  for (let i = 0; i < node.length; i++) {
-+    identifiers.push(node[i].id.name);
++    store[node[i].id.name] = weight;
 +  }
-+  return identifiers;
 +}
 +
-+function afterCaret(node, line, column) {
-+  return node.loc.start.line > line ||
-+         (node.loc.start.line === line &&
-+          node.loc.start.column > column);
++function argumentNames(node, store, weight) {
++  for (let i = 0; i < node.length; i++) {
++    store[node[i].name] = weight;
++  }
 +}
 +
 +

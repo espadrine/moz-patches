@@ -153,7 +153,7 @@ diff --git a/browser/devtools/sourceeditor/autocompletion.jsm b/browser/devtools
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/sourceeditor/autocompletion.jsm
-@@ -0,0 +1,705 @@
+@@ -0,0 +1,709 @@
 +/* vim:set ts=2 sw=2 sts=2 et tw=80:
 + * This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -522,11 +522,11 @@ new file mode 100644
 +      this._staticCandidates = getStaticScope(source, caret.line + 1, caret.col) ||
 +                               this._staticCandidates;
 +    }
++    let staticCandidates = {};
 +    // Right now, we can only complete variables.
 +    if (identifier.indexOf(".") == -1 && identifier.indexOf("[") == -1 &&
 +        // Thou shalt only complete what there is to complete.
 +        identifier.length != 0) {
-+      let staticCandidates = {};
 +      for (let candidate in this._staticCandidates) {
 +        // The candidate must match and have something to add!
 +        if (candidate.indexOf(identifier) == 0
@@ -550,7 +550,11 @@ new file mode 100644
 +    if (this.getSandbox) {
 +      let sandboxCompletion = JSPropertyProvider(this.getSandbox(), root);
 +      if (sandboxCompletion) {
-+        candidates = candidates.concat(sandboxCompletion.matches);
++        candidates = candidates.concat(sandboxCompletion.matches
++            .filter(function(candidate) {
++          // We are removing candidates from level 2.
++          return staticCandidates[candidate] === undefined;
++        }));
 +        completions = completions.concat(
 +          sandboxCompletion.matches.map(function(candidate) {
 +            return candidate.slice(sandboxCompletion.matchProp.length);

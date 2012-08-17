@@ -153,7 +153,7 @@ diff --git a/browser/devtools/sourceeditor/autocompletion.jsm b/browser/devtools
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/sourceeditor/autocompletion.jsm
-@@ -0,0 +1,723 @@
+@@ -0,0 +1,720 @@
 +/* vim:set ts=2 sw=2 sts=2 et tw=80:
 + * This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -363,13 +363,9 @@ new file mode 100644
 +  // Specific autocompletion-only keys.
 +  _keyBindings: function AC_keyBindings(e) {
 +    if (e.keyCode == 27) {          // ESC key.
-+      try {
-+        if (this._cycling) {
-+          this.stop();
-+          this.editor.setText("", this._start, this._end);
-+        }
-+      } catch(e) {
-+        dump('error ' + e.stack + '\n');
++      if (this._cycling) {
++        this.stop();
++        this.editor.setText("", this._start, this._end);
 +      }
 +      e.stopPropagation();
 +    } else if (e.keyCode == 38) {   // ↑ key.
@@ -567,7 +563,8 @@ new file mode 100644
 +        candidates = candidates.concat(sandboxCompletion.matches
 +            .filter(function(candidate) {
 +          // We are removing candidates from level 2.
-+          return staticCandidates[candidate] === undefined;
++          // Each static candidate has a number in staticCandidates.
++          return +staticCandidates[candidate] !== staticCandidates[candidate];
 +        }));
 +        completions = completions.concat(
 +          sandboxCompletion.matches.map(function(candidate) {
@@ -981,16 +978,3 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +    this._autocomplete = null;
    },
  };
-diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
---- a/browser/devtools/webconsole/WebConsoleUtils.jsm
-+++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
-@@ -968,7 +968,9 @@ function JSPropertyProvider(aScope, aInp
-     }
-   }
- 
-+  dump('webconsoleutils: matchProp ' + matchProp + '\n');
-   let matches = Object.keys(getMatchedProps(obj, {matchProp:matchProp}));
-+  dump('webconsoleutils: candidates  ' + matches.length + '\n');
- 
-   return {
-     matchProp: matchProp,

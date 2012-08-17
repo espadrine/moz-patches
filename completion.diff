@@ -529,28 +529,28 @@ new file mode 100644
 +
 +    // Only do this (possibly expensive) operation once every new line.
 +    if (this._staticCandidates == null || this._fireStaticAnalysis) {
-+      this._staticCandidates = getStaticScope(source, caret.line + 1, caret.col) ||
-+                               this._staticCandidates;
++      this._staticCandidates = getStaticScope(source, caret.line + 1, caret.col)
++                               || this._staticCandidates;
 +    }
-+    let staticCandidates = {};
++    let allStaticCandidates = this._staticCandidates;
 +    // Right now, we can only complete variables.
 +    if (identifier.indexOf(".") == -1 && identifier.indexOf("[") == -1 &&
 +        // Thou shalt only complete what there is to complete.
-+        identifier.length != 0) {
-+      for (let candidate in this._staticCandidates) {
++        identifier.length != 0 && allStaticCandidates != null) {
++      let staticCandidates = [];
++      for (let [candidate, weight] of allStaticCandidates) {
 +        // The candidate must match and have something to add!
 +        if (candidate.indexOf(identifier) == 0
 +            && candidate.length > identifier.length) {
-+          staticCandidates[candidate] = this._staticCandidates[candidate];
++          staticCandidates.push(candidate);
 +        }
 +      }
-+      let self = this;
-+      let ourCandidates = Object.keys(staticCandidates).sort(function(a, b) {
++      staticCandidates.sort(function(a, b) {
 +        // Sort them according to nearest scope.
-+        return self._staticCandidates[b] - self._staticCandidates[a];
++        return allStaticCandidates[b] - allStaticCandidates[a];
 +      });
-+      candidates = candidates.concat(ourCandidates);
-+      completions = completions.concat(ourCandidates.map(function(candidate) {
++      candidates = candidates.concat(staticCandidates);
++      completions = completions.concat(staticCandidates.map(function(candidate){
 +        return candidate.slice(identifier.length);
 +      }));
 +    }
@@ -563,8 +563,8 @@ new file mode 100644
 +        candidates = candidates.concat(sandboxCompletion.matches
 +            .filter(function(candidate) {
 +          // We are removing candidates from level 2.
-+          // Each static candidate has a number in staticCandidates.
-+          return +staticCandidates[candidate] !== staticCandidates[candidate];
++          if (allStaticCandidates == null)  return true;
++          return !allStaticCandidates.has(candidate);
 +        }));
 +        completions = completions.concat(
 +          sandboxCompletion.matches.map(function(candidate) {
@@ -632,13 +632,13 @@ new file mode 100644
 + *        (Optional) A starting point for indicating how deeply nested variables
 + *        are.
 + *
-+ * @return object|null
++ * @return Map|null
 + *         A map from all variable names to a number reflecting how deeply
 + *         nested in the scope the variable was. A bigger number reflects a more
 + *         deeply nested variable.
 + *         We return null if we could not parse the code.
 + */
-+function getStaticScope(script, line, column, store = {}, depth = 0) {
++function getStaticScope(script, line, column, store = new Map(), depth = 0) {
 +  let tree;
 +  try {
 +    tree = Reflect.parse(script);
@@ -656,7 +656,7 @@ new file mode 100644
 +      if (subnode.type == "VariableDeclaration") {
 +        declarations(subnode.declarations, store, stack.length);
 +      } else if (subnode.type == "FunctionDeclaration") {
-+        store[subnode.id.name] = stack.length;
++        store.set(subnode.id.name, stack.length);
 +        if (caretInBlock(subnode, line, column)) {
 +          // Parameters are one level deeper than the function's name itself.
 +          argumentNames(subnode.params, store, stack.length + 1);
@@ -710,13 +710,13 @@ new file mode 100644
 +
 +function declarations(node, store, weight) {
 +  for (let i = 0; i < node.length; i++) {
-+    store[node[i].id.name] = weight;
++    store.set(node[i].id.name, weight);
 +  }
 +}
 +
 +function argumentNames(node, store, weight) {
 +  for (let i = 0; i < node.length; i++) {
-+    store[node[i].name] = weight;
++    store.set(node[i].name, weight);
 +  }
 +}
 +

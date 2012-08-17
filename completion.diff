@@ -153,7 +153,7 @@ diff --git a/browser/devtools/sourceeditor/autocompletion.jsm b/browser/devtools
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/sourceeditor/autocompletion.jsm
-@@ -0,0 +1,709 @@
+@@ -0,0 +1,723 @@
 +/* vim:set ts=2 sw=2 sts=2 et tw=80:
 + * This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -262,6 +262,7 @@ new file mode 100644
 +  _end: 0,
 +  _insertingText: false,
 +  _completion: null,
++  // Static analysis would better be cached.
 +  _staticCandidates: null,
 +  _fireStaticAnalysis: true,
 +
@@ -275,7 +276,6 @@ new file mode 100644
 +   * popover (see function createPopover()).
 +   */
 +  displayCompletion: function AC_displayCompletion() {
-+    dump('espadrine display completion\n');
 +    if (this._completion == null) {
 +      // The following line may be computationally intensive.
 +      this._completion = this.complete();
@@ -320,6 +320,18 @@ new file mode 100644
 +    if (!this._cycling) {
 +      this.popover.style.left = coord.x + "px";
 +    }
++    // Bug 779642 forces me to add this bit of fixing…
++    let insideDoc = this.document.getElementById("editor")
++      .firstChild.contentDocument;
++    let caret = this.editor.getCaretPosition();
++    let line = this.editor._model.getLine(caret.line);
++    let linesOM = insideDoc.getElementById("clientDiv").childNodes;
++    let lineIndex = 0;
++    for (; line + " " !== linesOM[lineIndex].textContent; lineIndex++) {}
++    coord.y = insideDoc.defaultView.scrollY +
++      linesOM[lineIndex].getBoundingClientRect().top +
++      linesOM[lineIndex].scrollHeight;
++    // End of Bug 779642 fix.
 +    this.popover.style.top = coord.y + "px";
 +    this.popover.style.display = "block";
 +
@@ -351,9 +363,11 @@ new file mode 100644
 +  // Specific autocompletion-only keys.
 +  _keyBindings: function AC_keyBindings(e) {
 +    if (e.keyCode == 27) {          // ESC key.
-+      this.stop();
 +      try {
-+        this.editor.setText("", this._start, this._end);
++        if (this._cycling) {
++          this.stop();
++          this.editor.setText("", this._start, this._end);
++        }
 +      } catch(e) {
 +        dump('error ' + e.stack + '\n');
 +      }

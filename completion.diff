@@ -153,7 +153,7 @@ diff --git a/browser/devtools/sourceeditor/autocompletion.jsm b/browser/devtools
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/sourceeditor/autocompletion.jsm
-@@ -0,0 +1,723 @@
+@@ -0,0 +1,818 @@
 +/* vim:set ts=2 sw=2 sts=2 et tw=80:
 + * This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -222,20 +222,24 @@ new file mode 100644
 +  this.document = ed.editorElement.contentDocument;
 +  this.popover = createPopover(this.document, cssClass);
 +
-+  // The function we use to autocomplete.
-+  this.complete = COMPLETERS[ed._mode];
-+
 +  // The following will fire the autocompletion system on each character!
 +  this.editor.editorElement.addEventListener("keypress", function(e) {
-+    if (!this._insertingText && e.charCode > 0) {
++    if (!this._insertingText) {
 +      if (e.keyCode == 13) {
 +        this._fireStaticAnalysis = true;
 +      }
-+      this.document.defaultView.setTimeout(this.displayCompletion.bind(this),0);
++      if (e.charCode > 0) {
++        this.document.defaultView.setTimeout(this.displayCompletion.bind(this),0);
++      }
 +    }
 +  }.bind(this));
 +  this.editor.addEventListener("Selection", function(e) {
-+    this._fireStaticAnalysis = true;
++    // If the distance between the old position and the new is bigger than 1,
++    // the static analysis is worth updating.
++    if ((e.oldValue.start - e.newValue.start) *
++        (e.oldValue.start - e.newValue.start) > 1) {
++      this._fireStaticAnalysis = true;
++    }
 +  }.bind(this));
 +
 +  // Those will become event listeners.
@@ -280,7 +284,7 @@ new file mode 100644
 +  displayCompletion: function AC_displayCompletion() {
 +    if (this._completion == null) {
 +      // The following line may be computationally intensive.
-+      this._completion = this.complete();
++      this._completion = COMPLETERS[this.editor._mode].bind(this)();
 +    }
 +    let completions = this._completion.candidates;
 +
@@ -365,8 +369,8 @@ new file mode 100644
 +  // Specific autocompletion-only keys.
 +  _keyBindings: function AC_keyBindings(e) {
 +    if (e.keyCode == 27) {          // ESC key.
++      this.stop();
 +      if (this._cycling) {
-+        this.stop();
 +        this.editor.setText("", this._start, this._end);
 +      }
 +      e.stopPropagation();
@@ -429,7 +433,7 @@ new file mode 100644
 +      this.editor._undoStack.startCompoundChange();
 +
 +      // The following line may be computationally intensive.
-+      this._completion = this.complete();
++      this._completion = COMPLETERS[this.editor._mode].bind(this)();
 +      if (count == 0) { count = 1; }
 +      if (count > 0) {
 +        // We can start from the beginning.
@@ -567,6 +571,8 @@ new file mode 100644
 +            .filter(function(candidate) {
 +          // We are removing candidates from level 2.
 +          if (allStaticCandidates == null)  return true;
++          if (allStaticCandidates.has(candidate)) {
++          }
 +          return !allStaticCandidates.has(candidate);
 +        }));
 +        completions = completions.concat(
@@ -645,7 +651,7 @@ new file mode 100644
 +  let tree;
 +  try {
 +    tree = Reflect.parse(script);
-+  } catch (e) { return null; }
++  } catch (e) { dump('Parsing error: ' + e.message + '\n'); return null; }
 +
 +  let node = tree.body;
 +  let stack = [];
@@ -656,17 +662,40 @@ new file mode 100644
 +    deeper = null;
 +    for (; index < node.length; index++) {
 +      let subnode = node[index];
-+      if (subnode.type == "VariableDeclaration") {
-+        declarations(subnode.declarations, store, stack.length);
-+      } else if (subnode.type == "FunctionDeclaration") {
-+        store.set(subnode.id.name, stack.length);
++      while (["ReturnStatement", "VariableDeclarator", "ExpressionStatement",
++              "AssignmentExpression", "Property"].indexOf(subnode.type) >= 0) {
++        if (subnode.type == "ReturnStatement") {
++          subnode = subnode.argument;
++        }
++        if (subnode.type == "VariableDeclarator") {
++          // Variable names go one level too deep.
++          store.set(subnode.id.name, stack.length - 1);
++          if (!!subnode.init)  { subnode = subnode.init; }
++          else break;
++        }
++        if (subnode.type == "ExpressionStatement") {
++          subnode = subnode.expression;  // Parenthesized expression.
++        }
++        if (subnode.type == "AssignmentExpression") {
++          subnode = subnode.right;       // f.g = function(){…};
++        }
++        if (subnode.type == "Property") {
++          subnode = subnode.value;       // {f: function(){…}};
++        }
++      }
++      if (subnode.type == "FunctionDeclaration" ||
++          subnode.type == "FunctionExpression" ||
++          // Expressions, eg, (function(){…}());
++          (subnode.callee && subnode.callee.type == "FunctionExpression")) {
++        if (subnode.callee)  { subnode = subnode.callee; }
++        if (subnode.id)  { store.set(subnode.id.name, stack.length); }
 +        if (caretInBlock(subnode, line, column)) {
 +          // Parameters are one level deeper than the function's name itself.
 +          argumentNames(subnode.params, store, stack.length + 1);
 +        }
 +      }
-+      deeper = nestedBody(subnode);
-+      if (deeper && caretInBlock(subnode, line, column)) {
++      deeper = nestedNodes(subnode, line, column);
++      if (!!deeper) {
 +        // We need to go deeper.
 +        stack.push(node);
 +        node = deeper;
@@ -684,21 +713,65 @@ new file mode 100644
 +  return store;
 +}
 +
-+function nestedBody(node) {
++/**
++ * Find a parse node to iterate over.
++ * @param mixed node
++ *        JS parse tree node.
++ * @param number line
++ *        Line on which the caret is.
++ * @param number column
++ *        Column on which the caret is.
++ * @return array
++ *         The node's array. Can also return null if it gets unhappy.
++ */
++function nestedNodes(node, line, column) {
++  let body = null;
++  let newScope = true;  // Whether we enter a new scope.
 +  if (node.body) {
 +    if (node.body.body) {
 +      // Function declaration has a body in a body.
-+      return node.body.body;
++      body = node.body.body;
 +    } else {
-+      return node.body;
++      body = node.body;
 +    }
 +  } else if (node.consequent) {
-+    return node.consequent.body;  // If statements.
++    body = node.consequent.body;  // If statements.
 +  } else if (node.alternate) {
-+    return node.alternate.body;  // If/else statements.
-+  } else return null;
++    body = node.alternate.body;   // If/else statements.
++  } else if (node.block) {
++    body = node.block.body;       // Try statements.
++  } else if (node.handlers) {     // Try/catch.
++    body = node.handlers.body.body;
++  } else if (node.finalizer) {
++    body = node.finalizer.body;   // Try/catch/finally.
++  } else if (node.declarations) {
++    body = node.declarations;     // Variable declarations.
++    newScope = false;
++  } else if (node.arguments) {
++    body = node.arguments;   // Function calls, eg, f(function(){…});
++  } else if (node.properties) {
++    body = node.properties;  // Objects, eg, ({f: function(){…}});
++  } else if (node.elements) {
++    body = node.elements;    // Array, eg, [function(){…}]
++  }
++  if (!body ||
++      // No need to parse a scope in which the caret is not.
++      (newScope && !caretInBlock(node, line, column))) {
++    return null;
++  }
++  return body;
 +}
 +
++/**
++ * @param mixed node
++ *        The parse tree node in which the caret might be.
++ * @param number line
++ *        The line where the caret is (starts with 1).
++ * @param number column
++ *        The column where the caret is (starts with 0).
++ * @return boolean
++ *         Whether the caret is in the piece of code represented by the node.
++ */
 +function caretInBlock(node, line, column) {
 +  return (
 +    // The node starts before the cursor.
@@ -711,12 +784,16 @@ new file mode 100644
 +      column <= node.loc.end.column)));
 +}
 +
-+function declarations(node, store, weight) {
-+  for (let i = 0; i < node.length; i++) {
-+    store.set(node[i].id.name, weight);
-+  }
-+}
-+
++/**
++ * Get the argument names of a function.
++ * @param array node
++ *        The "params" property of a FunctionExpression.
++ * @param Map store
++ *        Where to store the information that an identifier exists and has the
++ *        given weight.
++ * @param number weight
++ *        A measure of how deeply nested the node is. The deeper, the bigger.
++ */
 +function argumentNames(node, store, weight) {
 +  for (let i = 0; i < node.length; i++) {
 +    store.set(node[i].name, weight);
@@ -725,24 +802,26 @@ new file mode 100644
 +
 +
 +// States.
-+// IDEN can be things like |foo[bar].baz|.
-+const IDEN     = 1; // identifier
-+const IDEN_SP  = 2; // special chars in identifiers (spaces, dots, brackets).
-+const REGEX    = 3; // regular expression
-+const COMMENT  = 4; // comment
++const STATES = {
++  // IDEN can be things like `foo[bar /* quux */].baz`.
++  IDEN     : 1, // identifier
++  IDEN_SP  : 2, // special chars in identifiers (spaces, dots, brackets).
++  REGEX    : 3, // regular expression
++  COMMENT  : 4, // comment
 +
-+// Relevant character codes.
-+// May be used as states.
-+const ETHER   = 0;  // ∅
-+const QUOTE   = 39; // '
-+const DQUOTE  = 34; // "
-+const BSLASH  = 92; // \
-+const SLASH   = 47; // /
-+const STAR    = 42; // *
-+const LF      = 10; // \n
-+const DOT     = 46; // .
-+const BRACK   = 91; // [
-+const CBRACK  = 93; // ]
++  // Relevant character codes.
++  // May be used as states.
++  ETHER   : 0,  // ∅
++  QUOTE   : 39, // '
++  DQUOTE  : 34, // "
++  BSLASH  : 92, // \
++  SLASH   : 47, // /
++  STAR    : 42, // *
++  LF      : 10, // \n
++  DOT     : 46, // .
++  BRACK   : 91, // [
++  CBRACK  : 93, // ]
++};
 +
 +// Compiled '>=!|<+-&*%^/{}()[];,~?:\\/\'"' to a map.
 +const PUNCTUATION = {62:1, 61:1, 33:1, 124:1, 60:1, 43:1, 45:1, 38:1, 42:1, 37:1, 94:1, 47:1, 123:1, 125:1, 40:1, 41:1, 91:1, 93:1, 59:1, 44:1, 126:1, 63:1, 58:1, 92:1, 39:1, 34:1};
@@ -762,7 +841,7 @@ new file mode 100644
 + */
 +function lineParser(source, offset = source.length) {
 +  // Find beginning of line.
-+  let bol = offset;
++  let bol = offset - 1;  // We may be *on* a newline, we want the previous line.
 +  for (;source[bol] !== "\n" && source[bol] !== "\u2028" && source[bol] !== "\u2029"
 +       && bol != -1;
 +       bol--) {}
@@ -777,63 +856,65 @@ new file mode 100644
 +    state = newState;
 +  }
 +
-+  let i, c, state = ETHER;
++  let i, c, state = STATES.ETHER;
 +  for (i = bol; i < offset && source[i]; i++) {
 +    c = source[i].charCodeAt(0);
-+    if (state == ETHER) {
-+      if (c == QUOTE || c == DQUOTE || c == SLASH)  { setState(c); }
++    if (state == STATES.ETHER) {
++      if (c == STATES.QUOTE || c == STATES.DQUOTE || c == STATES.SLASH)  {
++        setState(c);
++      }
 +      // Unicode identifiers, eg. |var \u0042 = 42;|.
-+      else if (c == BSLASH)  { setState(IDEN); i += 5; }
++      else if (c == STATES.BSLASH)  { setState(STATES.IDEN); i += 5; }
 +      else if (isIdentifierChar(c)) {
-+        setState(IDEN);
-+      } else if (retain && c == CBRACK) {
-+        setState(IDEN);
++        setState(STATES.IDEN);
++      } else if (retain && c == STATES.CBRACK) {
++        setState(STATES.IDEN);
 +        retain = false;
 +      }
-+    } else if (state == QUOTE || state == DQUOTE) {
-+      if (c == BSLASH)  { i++; }
-+      else if (state == c)  { setState(ETHER); }
-+    } else if (state == SLASH) {
-+      if (c == SLASH)  { setState(COMMENT); }
-+      else if (c == STAR) {
++    } else if (state == STATES.QUOTE || state == STATES.DQUOTE) {
++      if (c == STATES.BSLASH)  { i++; }
++      else if (state == c)  { setState(STATES.ETHER); }
++    } else if (state == STATES.SLASH) {
++      if (c == STATES.SLASH)  { setState(STATES.COMMENT); }
++      else if (c == STATES.STAR) {
 +        // Go fast to the end of the comment.
-+        setState(ETHER);
++        setState(STATES.ETHER);
 +        i += source.slice(i, offset).indexOf("*/") + 2;
 +        // If we currently are in a comment, say it.
 +        if (i < 2) {
-+          setState(COMMENT);
++          setState(STATES.COMMENT);
 +          i = offset;
 +        }
 +      }
-+      else  { setState(REGEX); }
-+    } else if (state == COMMENT) {
-+      if (c == LF || c == 0x2028 || c == 0x2029)  { setState(ETHER); }
-+    } else if (state == REGEX) {
-+      if (c == BSLASH)  { i++; }
-+      else if (c == SLASH)  { setState(ETHER); }
-+    } else if (state == IDEN) {
++      else  { setState(STATES.REGEX); }
++    } else if (state == STATES.COMMENT) {
++      if (c == LF || c == 0x2028 || c == 0x2029)  { setState(STATES.ETHER); }
++    } else if (state == STATES.REGEX) {
++      if (c == STATES.BSLASH)  { i++; }
++      else if (c == STATES.SLASH)  { setState(STATES.ETHER); }
++    } else if (state == STATES.IDEN) {
 +      if (isWhiteSpace(c)) {
 +        retain = true;
-+        setState(IDEN_SP);
-+      } else if (c == BRACK) {
++        setState(STATES.IDEN_SP);
++      } else if (c == STATES.BRACK) {
 +        retain = true;
-+        setState(ETHER);
++        setState(STATES.ETHER);
 +      } else if (PUNCTUATION[c]) {
-+        setState(ETHER);
++        setState(STATES.ETHER);
 +      }
-+    } else if (state == IDEN_SP) {
++    } else if (state == STATES.IDEN_SP) {
 +      // This state starts with retain = true.
-+      if (c == DOT) {
-+        setState(IDEN);
++      if (c == STATES.DOT) {
++        setState(STATES.IDEN);
 +        retain = false;
-+      } else if (c == BRACK) {
-+        setState(ETHER);
++      } else if (c == STATES.BRACK) {
++        setState(STATES.ETHER);
 +      } else if (isIdentifierChar(c)) {
 +        retain = false;
-+        setState(IDEN);
++        setState(STATES.IDEN);
 +      } else if (PUNCTUATION[c]) {
 +        retain = false;
-+        setState(ETHER);
++        setState(STATES.ETHER);
 +      }
 +    }
 +  }
@@ -844,6 +925,13 @@ new file mode 100644
 +  };
 +}
 +
++/**
++ * Check whether the character code point is a (JS) whitespace character.
++ * @param number c
++ *        Code point for the character to check.
++ * @return boolean
++ *         true if the character is whitespace.
++ */
 +function isWhiteSpace(c) {
 +  return (c === 32) || (c === 0x0009) || (c === 0x000B) ||
 +    (c === 0x000C) || (c === 0x00A0) ||
@@ -851,6 +939,13 @@ new file mode 100644
 +     [0x1680,0x180E,0x2000,0x2001,0x2002,0x2003,0x2004,0x2005,0x2006,0x2007,0x2008,0x2009,0x200A,0x202F,0x205F,0x3000,0xFEFF].indexOf(c) >= 0);
 +}
 +
++/**
++ * Check whether the character code point is a (JS) start identifier character.
++ * @param number c
++ *        Code point for the character to check.
++ * @return boolean
++ *         true if the character is an identifier.
++ */
 +function isIdentifierChar(c) {
 +  return (// Non-ascii chars are identifiers, but three codes.
 +          (c > 128 && c != 0xffff && c != 0x2028 && c != 0x2029) ||
@@ -860,19 +955,19 @@ new file mode 100644
 +          c == 0x5f || c == 0x24);
 +}
 +
++/**
++ * Fetch a long identifier before the caret in a JS source file.
++ * @param string source
++ *        JS source code (may not be 100% valid JS on the current line).
++ * @param number offset
++ *        Position of the caret. Defaults to the end of the string.
++ * @return string
++ *         Identifier. Can be of the form `foo[bar].baz[`.
++ */
 +function getIdentifier(source, offset = source.length) {
-+  // Remove the completion character.
-+  source = source.slice(0, offset).trim();
-+  let complChar = source.slice(-1);
-+
-+  if (complChar === "." || complChar === "[") {
-+    source = source.slice(0, -1);
-+    if (offset > source.length)  { offset = source.length; }
-+  }
-+
 +  // Locate the identifier we read.
 +  let f = lineParser(source, offset);
-+  if (f.state == IDEN) {
++  if (f.state == STATES.IDEN) {
 +    return source.slice(f.index, offset);
 +  } else return "";
 +}
@@ -981,3 +1076,47 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +    this._autocomplete = null;
    },
  };
+diff --git a/browser/devtools/sourceeditor/test/Makefile.in b/browser/devtools/sourceeditor/test/Makefile.in
+--- a/browser/devtools/sourceeditor/test/Makefile.in
++++ b/browser/devtools/sourceeditor/test/Makefile.in
+@@ -30,6 +30,7 @@ MOCHITEST_BROWSER_FILES = \
+ 		browser_bug725430_comment_uncomment.js \
+ 		browser_bug731721_debugger_stepping.js \
+ 		browser_bug729960_block_bracket_jump.js \
++		browser_sourceeditor_autocompletion.js \
+ 		head.js \
+ 
+ include $(topsrcdir)/config/rules.mk
+diff --git a/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js b/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js
+--- a/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js
++++ b/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js
+@@ -168,13 +168,6 @@ function editorLoaded()
+ 
+   is(editor.getCaretOffset(), 8, "caret moved to the left");
+ 
+-  EventUtils.synthesizeKey(".", {}, testWin);
+-  EventUtils.synthesizeKey("VK_TAB", {}, testWin);
+-
+-  is(editor.getText(), "code-ed..     aitor", "Tab works");
+-
+-  is(editor.getCaretOffset(), 14, "caret location is correct");
+-
+   // Test the Tab key.
+ 
+   editor.setText("a\n  b\n c");
+diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
+--- a/browser/devtools/webconsole/WebConsoleUtils.jsm
++++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
+@@ -992,10 +992,10 @@ function JSPropertyProvider(aScope, aInp
+  * @return object
+  *         Object whose keys are all accessible properties on the object.
+  */
+-function getMatchedProps(aObj, aOptions = {matchProp: ""})
++function getMatchedProps(aObj, aOptions)
+ {
+   // Argument defaults.
+-  aOptions.matchProp = aOptions.matchProp || "";
++  aOptions = aOptions || {matchProp: ""};
+ 
+   if (aObj == null) { return {}; }
+   try {

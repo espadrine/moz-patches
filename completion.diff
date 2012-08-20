@@ -1087,6 +1087,91 @@ diff --git a/browser/devtools/sourceeditor/test/Makefile.in b/browser/devtools/s
  		head.js \
  
  include $(topsrcdir)/config/rules.mk
+diff --git a/browser/devtools/sourceeditor/test/browser_sourceeditor_autocompletion.js b/browser/devtools/sourceeditor/test/browser_sourceeditor_autocompletion.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/sourceeditor/test/browser_sourceeditor_autocompletion.js
+@@ -0,0 +1,80 @@
++/* vim: set ts=2 et sw=2 tw=80: */
++/* Any copyright is dedicated to the Public Domain.
++   http://creativecommons.org/publicdomain/zero/1.0/ */
++
++"use strict";
++
++let testWin;
++let testDoc;
++let editor;
++
++let temp = {};
++Cu.import("resource:///modules/source-editor.jsm", temp);
++let SourceEditor = temp.SourceEditor;
++
++function test()
++{
++  waitForExplicitFinish();
++
++  const windowUrl = "data:text/xml,<?xml version='1.0'?>" +
++    "<window xmlns='http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul'" +
++    " title='test for bug 660784' width='600' height='500'><hbox flex='1'/></window>";
++  const windowFeatures = "chrome,titlebar,toolbar,centerscreen,resizable,dialog=no";
++
++  testWin = Services.ww.openWindow(null, windowUrl, "_blank", windowFeatures, null);
++  testWin.addEventListener("load", function onWindowLoad() {
++    testWin.removeEventListener("load", onWindowLoad, false);
++    waitForFocus(initEditor, testWin);
++  }, false);
++}
++
++function initEditor()
++{
++  testDoc = testWin.document;
++  let hbox = testDoc.querySelector("hbox");
++  editor = new SourceEditor();
++  editor.init(hbox, {}, editorLoaded);
++}
++
++function editorLoaded()
++{
++  // JS autocompletion.
++  editor.setMode(SourceEditor.MODES.JAVASCRIPT);
++  editor.focus();
++
++  let before = "let window = {};\nwin";
++  let after = "";
++  editor.setText(before);
++  editor.setCaretOffset(before.length);
++  EventUtils.synthesizeKey("VK_TAB", {}, testWin);
++  is(editor.getText(), before + "dow", "Static JS autocompletion.");
++
++  before = "let window = {}, winnipeg = 'Manitoba';\nwin";
++  editor.setText(before);
++  editor.setCaretOffset(before.length);
++  EventUtils.synthesizeKey("VK_TAB", {}, testWin);
++  EventUtils.synthesizeKey("VK_TAB", {}, testWin);
++  is(editor.getText(), before + "nipeg", "Autocompletion: cycling twice.");
++
++  EventUtils.synthesizeKey("VK_TAB", {shiftKey: true}, testWin);
++  EventUtils.synthesizeKey("VK_TAB", {shiftKey: true}, testWin);
++  is(editor.getText(), before + "nipeg", "Autocompletion: cycling backwards.");
++
++  before = "let foo = {foo: [function(foobar){\nfoo";
++  after = "\n}]};";
++  editor.setText(before + after);
++  editor.setCaretOffset(before.length);
++  EventUtils.synthesizeKey("VK_TAB", {}, testWin);
++  is(editor.getText(), before + "bar" + after,
++     "Deep static JS autocompletion.");
++
++  testEnd();
++}
++
++function testEnd()
++{
++  editor.destroy();
++  testWin.close();
++  testWin = testDoc = editor = null;
++  waitForFocus(finish, window);
++}
 diff --git a/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js b/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js
 --- a/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js
 +++ b/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js

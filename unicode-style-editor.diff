@@ -51,14 +51,14 @@ diff --git a/browser/devtools/styleeditor/StyleEditor.jsm b/browser/devtools/sty
 +      let parentSheet = sheet.parentStyleSheet;
 +      if (parentSheet && parentSheet.cssRules &&
 +          parentSheet.cssRules[0].type == Ci.nsIDOMCSSRule.CHARSET_RULE) {
-+        return this._convertToUnicode(aString, parentSheet.cssRules[0].encoding);
++        return this._convertToUnicode(aString,
++            parentSheet.cssRules[0].encoding);
 +      }
 +
-+      if (sheet.ownerNode) {
-+        // step 4 (2 of 2): charset of referring document.
-+        if (sheet.ownerNode.ownerDocument.characterSet) {
-+          return this._convertToUnicode(aString, sheet.ownerNode.ownerDocument.characterSet);
-+        }
++      // step 4 (2 of 2): charset of referring document.
++      if (sheet.ownerNode && sheet.ownerNode.ownerDocument.characterSet) {
++        return this._convertToUnicode(aString,
++            sheet.ownerNode.ownerDocument.characterSet);
 +      }
 +    }
 +

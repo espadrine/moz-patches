@@ -148,19 +148,18 @@ new file mode 100644
 diff --git a/browser/devtools/sourceeditor/Makefile.in b/browser/devtools/sourceeditor/Makefile.in
 --- a/browser/devtools/sourceeditor/Makefile.in
 +++ b/browser/devtools/sourceeditor/Makefile.in
-@@ -14,6 +14,7 @@ TEST_DIRS += test
- 
- EXTRA_JS_MODULES = \
- 	source-editor.jsm \
-+	autocompletion.jsm \
- 	source-editor-orion.jsm \
- 	source-editor-ui.jsm \
+@@ -19,3 +19,6 @@ EXTRA_JS_MODULES = \
  	$(NULL)
+ 
+ include $(topsrcdir)/config/rules.mk
++
++libs::
++	$(NSINSTALL) $(srcdir)/autocompletion.jsm $(FINAL_TARGET)/modules/devtools
 diff --git a/browser/devtools/sourceeditor/autocompletion.jsm b/browser/devtools/sourceeditor/autocompletion.jsm
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/sourceeditor/autocompletion.jsm
-@@ -0,0 +1,835 @@
+@@ -0,0 +1,867 @@
 +/* vim:set ts=2 sw=2 sts=2 et tw=80:
 + * This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -171,7 +170,6 @@ new file mode 100644
 +const Cu = Components.utils;
 +Cu.import("resource:///modules/WebConsoleUtils.jsm");
 +Cu.import("resource://gre/modules/reflect.jsm");
-+Cu.import("resource://gre/modules/Services.jsm");
 +
 +var EXPORTED_SYMBOLS = ["Autocompletion"];
 +
@@ -179,16 +177,18 @@ new file mode 100644
 + * Create a new popover. It gets a "div.popover" class.
 + * It starts invisible (display: none).
 + *
-+ * @param object document
++ * @param object aDocument
 + *        The DOM document in which to add a popover.
-+ * @param string cssClass
++ * @param string aCssClass
 + *        The CSS class that you want it to have (optional).
 + *        Defaults to "autocomplete".
 + *
-+ * @return object popover
++ * @return object
 + *         The DOM element representing the popover.
 + */
-+function createPopover(document, cssClass = "autocomplete") {
++function createPopover(aDocument, aCssClass = "autocomplete") {
++  let document = aDocument;
++  let cssClass = aCssClass;
 +  let popover = document.createElement("div");
 +  popover.classList.add("popover");
 +  if (cssClass) {
@@ -202,19 +202,15 @@ new file mode 100644
 +}
 +
 +const NUM_VISIBLE_COMPLETIONS = 10;
++const DELAYED_POPUP = 200;
 +
 +/**
 + * Autocompletion object.
 + * This constructor creates the necessary DOM popup.
 + *
-+ * @param object ed
-+ *        The Orion editor to target.
-+ *        ed._mode must be "js".
-+ *        ed._view must be a TextView.
-+ *        ed._model must be a TextModel.
-+ *        ed._undoStack must be an UndoStack.
-+ *        ed.editorElement must be the XUL iframe containing the editor.
-+ * @param object options
++ * @param object aEd
++ *        The Source Editor instance to target.
++ * @param object aOptions
 + *        Properties for tuning certain defaults:
 + *        - numVisibleCompletions (defaults to NUM_VISIBLE_COMPLETIONS): number
 + *          of visible completions with respect to all possible completions.
@@ -225,15 +221,16 @@ new file mode 100644
 + *
 + *  @see NUM_VISIBLE_COMPLETIONS
 + */
-+function Autocompletion(ed, options = {}) {
-+  let cssClass = options.cssClass;
-+  this.numVisibleCompletions = options.numVisibleCompletions ||
++function Autocompletion(aEd, aOptions = {}) {
++  this.numVisibleCompletions = aOptions.numVisibleCompletions ||
 +      NUM_VISIBLE_COMPLETIONS;
-+  this.getSandbox = options.getSandbox || null;
-+  Cu.evalInSandbox("", this.getSandbox());  // Initialize the sandbox.
-+  this.editor = ed;
-+  this.document = ed.editorElement.contentDocument;
-+  this.popover = createPopover(this.document, cssClass);
++  this.getSandbox = aOptions.getSandbox || null;
++  if (this.getSandbox) {
++    Cu.evalInSandbox("", this.getSandbox());  // Initialize the sandbox.
++  }
++  this.editor = aEd;
++  this.document = aEd.editorElement.contentDocument;
++  this.popover = createPopover(this.document, aOptions.cssClass);
 +
 +  // The following will fire the autocompletion system on each character!
 +  this.editor.editorElement.addEventListener("keypress",
@@ -250,7 +247,6 @@ new file mode 100644
 +  // The following set the way in which the autocompletion system works.
 +  getSandbox: null,
 +  numVisibleCompletions: NUM_VISIBLE_COMPLETIONS,
-+  complete: null,
 +
 +  // The following are useful DOM elements.
 +  editor: null,
@@ -274,15 +270,25 @@ new file mode 100644
 +  _stopBound: null,
 +  _keyBindingsBound: null,
 +
++  _delayedPopup: null,
++
++  runCompleters: function AC_runCompleters()
++  {
++    if (COMPLETERS[this.editor.getMode()]) {
++      // The following line may be computationally intensive.
++      this._completion = COMPLETERS[this.editor.getMode()].bind(this)();
++    }
++  },
++
 +  /**
 +   * Show the completions that are asked for.
 +   * This function assumes there exists a
 +   * popover (see function createPopover()).
 +   */
-+  displayCompletion: function AC_displayCompletion() {
++  displayCompletion: function AC_displayCompletion()
++  {
 +    if (this._completion == null) {
-+      // The following line may be computationally intensive.
-+      this._completion = COMPLETERS[this.editor._mode].bind(this)();
++      this.runCompleters();
 +    }
 +    let completions = this._completion.candidates;
 +
@@ -312,24 +318,13 @@ new file mode 100644
 +      Math.min(this.numVisibleCompletions, completions.length);
 +
 +    // Positioning the popover.
-+    let coord = ed._view.getLocationAtOffset(ed._view.getCaretOffset());
-+    coord.y += ed._view.getLineHeight();
-+    ed._view.convert(coord, "document", "page");
++    let coord = ed.getLocationAtOffset(ed.getCaretOffset());
++    let caret = ed.getCaretPosition();
++    coord.y += ed.getLineHeight(caret.line);
++    ed.convertCoordFromDocumentToPage(coord);
 +    if (!this._cycling) {
 +      this.popover.style.left = coord.x + "px";
 +    }
-+    // Bug 779642 forces me to add this bit of fixing…
-+    let insideDoc = this.document.getElementById("editor")
-+      .firstChild.contentDocument;
-+    let caret = this.editor.getCaretPosition();
-+    let line = this.editor._model.getLine(caret.line);
-+    let linesOM = insideDoc.getElementById("clientDiv").childNodes;
-+    let lineIndex = 0;
-+    for (; line + " " !== linesOM[lineIndex].textContent; lineIndex++) {}
-+    coord.y = insideDoc.defaultView.scrollY +
-+      linesOM[lineIndex].getBoundingClientRect().top +
-+      linesOM[lineIndex].scrollHeight;
-+    // End of Bug 779642 fix.
 +    this.popover.style.top = coord.y + "px";
 +    this.popover.style.display = "block";
 +
@@ -338,7 +333,7 @@ new file mode 100644
 +    let dheight = this.document.documentElement.clientHeight;
 +    if (coord.y + this.popover.offsetHeight > dheight) {
 +      this.popover.style.top = (coord.y - this.popover.offsetHeight
-+                                - ed._view.getLineHeight()) + "px";
++                                - ed.getLineHeight(caret.line)) + "px";
 +    }
 +    if (coord.x + this.popover.offsetWidth > dwidth) {
 +      this.popover.style.left = (dwidth - this.popover.offsetWidth) + "px";
@@ -359,7 +354,9 @@ new file mode 100644
 +  },
 +
 +  // Specific autocompletion-only keys.
-+  _keyBindings: function AC_keyBindings(e) {
++  _keyBindings: function AC__keyBindings(aEvent)
++  {
++    let e = aEvent;
 +    if (e.keyCode == e.DOM_VK_ESCAPE) {          // ESC key.
 +      this.stop();
 +      if (this._cycling) {
@@ -374,28 +371,35 @@ new file mode 100644
 +      }
 +    } else if (e.keyCode == e.DOM_VK_DOWN) {   // ↓ key.
 +      if (this._on) {
-+        this.cycle();
++        if (!this._cycling) {
++          this.cycle(2);
++        } else {
++          this.cycle();
++        }
 +        e.stopPropagation();
 +        e.preventDefault();
 +      }
 +    }
 +  },
 +
-+  _keyPress: function(e) {
++  _keyPress: function AC__keyPress(aEvent)
++  {
++    let e = aEvent;
 +    if (!this._insertingText) {
 +      if (e.keyCode == e.DOM_VK_RETURN) {
 +        this._fireStaticAnalysis = true;
 +      }
 +      if (e.charCode) {
-+        Services.tm.currentThread.dispatch({
-+          run: this.displayCompletion.bind(this)
-+        }, 1);
-+        //this.document.defaultView.setTimeout(this.displayCompletion.bind(this),0);
++        this.document.defaultView.clearTimeout(this._delayedPopup);
++        this._delayedPopup = this.document.defaultView
++            .setTimeout(this.displayCompletion.bind(this), DELAYED_POPUP);
 +      }
 +    }
 +  },
 +
-+  _selection: function(e) {
++  _selection: function AC__selection(aEvent)
++  {
++    let e = aEvent;
 +    // If the distance between the old position and the new is bigger than 1,
 +    // the static analysis is worth updating.
 +    if ((e.oldValue.start - e.newValue.start) *
@@ -404,19 +408,21 @@ new file mode 100644
 +    }
 +  },
 +
-+  _clickOnOption:  function() {
++  _clickOnOption:  function AC__clickOnOption()
++  {
 +    if (this._cycling) {
 +      this.cycle(this.popover.firstChild.selectedIndex - this._index);
 +    } else {
 +      this.cycle(this.popover.firstChild.selectedIndex + 1);
 +    }
-+    this.editor._view.focus();
++    this.editor.focus();
 +  },
 +
 +  /**
 +   * Make the completion popup invisible.
 +   */
-+  hideCompletion: function AC_hideCompletion() {
++  hideCompletion: function AC_hideCompletion()
++  {
 +    this.popover.style.display = "none";
 +    this.editor.removeEventListener("TextChanged",
 +                                    this._stopBound);
@@ -432,10 +438,12 @@ new file mode 100644
 +  /**
 +   * Cycle through autocompletion entries.
 +   *
-+   * @param number count
++   * @param number aCount
 +   *        The number of completions to advance to / go back to.
 +   */
-+  cycle: function AC_cycle(count = 1) {
++  cycle: function AC_cycle(aCount = 1)
++  {
++    let count = aCount;
 +    if (this._cycling) {
 +      this._index += count;
 +      if (this._index >= this._completion.candidates.length) {
@@ -449,15 +457,14 @@ new file mode 100644
 +
 +      // Insert the corresponding entry.
 +      this.insert(this._completion.completions[this._index]);
++      this.editor.endCompoundChange();
 +
 +    } else {  // We are not yet cycling.
 +      // Making a new spot in the undo stack allows the user
 +      // to undo the autocompletion.
-+      this.editor._undoStack.endCompoundChange();
-+      this.editor._undoStack.startCompoundChange();
++      this.editor.startCompoundChange();
 +
-+      // The following line may be computationally intensive.
-+      this._completion = COMPLETERS[this.editor._mode].bind(this)();
++      this.runCompleters();
 +      if (count == 0) { count = 1; }
 +      if (count > 0) {
 +        // We can start from the beginning.
@@ -492,10 +499,12 @@ new file mode 100644
 +  /**
 +   * Insert a possible autocompletion in the editor.
 +   *
-+   * @param string text
++   * @param string aText
 +   *        The text to insert inline.
 +   */
-+  insert: function AC_insert(text) {
++  insert: function AC_insert(aText)
++  {
++    let text = aText;
 +    this._insertingText = true;
 +    this.editor.setText(text, this._start, this._end);
 +    this._end = this._start + text.length;
@@ -508,7 +517,8 @@ new file mode 100644
 +   * @return boolean
 +   *         Whether the stop operation was successful.
 +   */
-+  stop: function AC_stop() {
++  stop: function AC_stop()
++  {
 +    // If the autocompletion system is going through an operation,
 +    // we cannot stop it.
 +    if (this._insertingText) { return false; }
@@ -541,9 +551,10 @@ new file mode 100644
 +   *         - candidates: A list of the matches to a possible completion.
 +   *         - completions: A list of the associated completion to a candidate.
 +   */
-+  js: function AC_JSCompleter() {
++  js: function AC_JSCompleter()
++  {
 +    let caret = this.editor.getCaretPosition();
-+    let line = this.editor._model.getLine(caret.line);
++    let line = this.editor.getLine(caret.line);
 +    let root = line.substr(0, caret.col);
 +
 +    let candidates = [];
@@ -653,15 +664,15 @@ new file mode 100644
 + * This static scope system is inflexible. If it can't parse the code, it won't
 + * give you anything.
 + *
-+ * @param string script
++ * @param string aScript
 + *        The JS script to parse.
-+ * @param number line
++ * @param number aLine
 + *        The line in the script from which we want the scope.
-+ * @param number column
++ * @param number aColumn
 + *        The column in the script from which we want the scope.
-+ * @param object store
++ * @param object aStore
 + *        (Optional) The object we return. Use to avoid allocation.
-+ * @param number depth
++ * @param number aDepth
 + *        (Optional) A starting point for indicating how deeply nested variables
 + *        are.
 + *
@@ -671,7 +682,12 @@ new file mode 100644
 + *         deeply nested variable.
 + *         We return null if we could not parse the code.
 + */
-+function getStaticScope(script, line, column, store = new Map(), depth = 0) {
++function getStaticScope(aScript, aLine, aColumn, aStore = new Map(), aDepth = 0) {
++  let script = aScript;
++  let line = aLine;
++  let column = aColumn;
++  let store = aStore;
++  let depth = aDepth;
 +  let tree;
 +  try {
 +    tree = Reflect.parse(script);
@@ -739,16 +755,19 @@ new file mode 100644
 +
 +/**
 + * Find a parse node to iterate over.
-+ * @param mixed node
++ * @param mixed aNode
 + *        JS parse tree node.
-+ * @param number line
++ * @param number aLine
 + *        Line on which the caret is.
-+ * @param number column
++ * @param number aColumn
 + *        Column on which the caret is.
 + * @return array
 + *         The node's array. Can also return null if it gets unhappy.
 + */
-+function nestedNodes(node, line, column) {
++function nestedNodes(aNode, aLine, aColumn) {
++  let node = aNode;
++  let line = aLine;
++  let column = aColumn;
 +  let body = null;
 +  let newScope = true;  // Whether we enter a new scope.
 +  if (node.body) {
@@ -787,16 +806,19 @@ new file mode 100644
 +}
 +
 +/**
-+ * @param mixed node
++ * @param mixed aNode
 + *        The parse tree node in which the caret might be.
-+ * @param number line
++ * @param number aLine
 + *        The line where the caret is (starts with 1).
-+ * @param number column
++ * @param number aColumn
 + *        The column where the caret is (starts with 0).
 + * @return boolean
 + *         Whether the caret is in the piece of code represented by the node.
 + */
-+function caretInBlock(node, line, column) {
++function caretInBlock(aNode, aLine, aColumn) {
++  let node = aNode;
++  let line = aLine;
++  let column = aColumn;
 +  return (
 +    // The node starts before the cursor.
 +    (node.loc.start.line < line ||
@@ -810,15 +832,18 @@ new file mode 100644
 +
 +/**
 + * Get the argument names of a function.
-+ * @param array node
++ * @param array aNode
 + *        The "params" property of a FunctionExpression.
-+ * @param Map store
++ * @param Map aStore
 + *        Where to store the information that an identifier exists and has the
 + *        given weight.
-+ * @param number weight
++ * @param number aWeight
 + *        A measure of how deeply nested the node is. The deeper, the bigger.
 + */
-+function argumentNames(node, store, weight) {
++function argumentNames(aNode, aStore, aWeight) {
++  let node = aNode;
++  let store = aStore;
++  let weight = aWeight;
 +  for (let i = 0; i < node.length; i++) {
 +    store.set(node[i].name, weight);
 +  }
@@ -853,9 +878,9 @@ new file mode 100644
 +/**
 + * Behold the line parser!
 + *
-+ * @param string source
++ * @param string aSource
 + *        Some JS code.
-+ * @param number offset
++ * @param number aOffset
 + *        The position of a caret, the line on which it is positioned we will
 + *        parse.
 + *
@@ -863,7 +888,9 @@ new file mode 100644
 + *         - state: The state in which we end up.
 + *         - index: The offset of the start of the element we last parsed.
 + */
-+function lineParser(source, offset = source.length) {
++function lineParser(aSource, aOffset = source.length) {
++  let source = aSource;
++  let offset = aOffset;
 +  // Find beginning of line.
 +  let bol = offset - 1;  // We may be *on* a newline, we want the previous line.
 +  for (;source[bol] !== "\n" && source[bol] !== "\u2028" && source[bol] !== "\u2029"
@@ -951,12 +978,13 @@ new file mode 100644
 +
 +/**
 + * Check whether the character code point is a (JS) whitespace character.
-+ * @param number c
++ * @param number aCharacter
 + *        Code point for the character to check.
 + * @return boolean
 + *         true if the character is whitespace.
 + */
-+function isWhiteSpace(c) {
++function isWhiteSpace(aCharacter) {
++  let c = aCharacter;
 +  return (c === 32) || (c === 0x0009) || (c === 0x000B) ||
 +    (c === 0x000C) || (c === 0x00A0) ||
 +    (c >= 0x1680 &&
@@ -965,12 +993,13 @@ new file mode 100644
 +
 +/**
 + * Check whether the character code point is a (JS) start identifier character.
-+ * @param number c
++ * @param number aCharacter
 + *        Code point for the character to check.
 + * @return boolean
 + *         true if the character is an identifier.
 + */
-+function isIdentifierChar(c) {
++function isIdentifierChar(aCharacter) {
++  let c = aCharacter;
 +  return (// Non-ascii chars are identifiers, but three codes.
 +          (c > 128 && c != 0xffff && c != 0x2028 && c != 0x2029) ||
 +          // Letters (uppercase, lowercase) are identifier chars.
@@ -981,14 +1010,16 @@ new file mode 100644
 +
 +/**
 + * Fetch a long identifier before the caret in a JS source file.
-+ * @param string source
++ * @param string aSource
 + *        JS source code (may not be 100% valid JS on the current line).
-+ * @param number offset
++ * @param number aOffset
 + *        Position of the caret. Defaults to the end of the string.
 + * @return string
 + *         Identifier. Can be of the form `foo[bar].baz[`.
 + */
-+function getIdentifier(source, offset = source.length) {
++function getIdentifier(aSource, aOffset = source.length) {
++  let source = aSource;
++  let offset = aOffset;
 +  // Locate the identifier we read.
 +  let f = lineParser(source, offset);
 +  if (f.state == STATES.IDEN) {
@@ -1003,7 +1034,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
  Cu.import("resource://gre/modules/Services.jsm");
  Cu.import("resource://gre/modules/XPCOMUtils.jsm");
  Cu.import("resource:///modules/source-editor-ui.jsm");
-+Cu.import("resource:///modules/autocompletion.jsm");
++Cu.import("resource:///modules/devtools/autocompletion.jsm");
  
  XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
                                     "@mozilla.org/widget/clipboardhelper;1",
@@ -1029,7 +1060,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
                            SourceEditor.DEFAULTS[key];
      }
  
-+    this._getSandbox = aConfig.getSandbox || null;
++    this._getSandbox = aConfig.getSandbox;
 +
      // TODO: Bug 725677 - Remove the deprecated placeholderText option from the
      // Source Editor initialization.
@@ -1046,19 +1077,26 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      this._undoStack = new UndoStack(this._view, config.undoLimit);
  
      this._dragAndDrop = new TextDND(this._view, this._undoStack);
-@@ -459,8 +471,21 @@ SourceEditor.prototype = {
+@@ -459,8 +471,28 @@ SourceEditor.prototype = {
    },
  
    /**
-+   * @return boolean
-+   *         True if we should be allowed to launch the autocompletion system.
++   * Check whether we should trigger autocompletion.
++   *
 +   * @private
++   * @param object aSelection
++   *        Contains the fields {start, end}. Span of the selected text in the
++   *        editor.
++   * @param string aPreviousChar
++   *        Last character inputted.
++   * @return boolean
++   *         True if we should allow autocompletion, otherwise false.
 +   */
-+  _isAutocompletionAllowed: function SE__isAutocompletionAllowed(selection,
-+                                                                 previousChar)
++  _isAutocompletionAllowed: function SE__isAutocompletionAllowed(aSelection,
++                                                                 aPreviousChar)
 +  {
-+    return this._autocomplete && selection.start == selection.end
-+        && /^[a-zA-Z0-9.$_]$/.test(previousChar);
++    return this._autocomplete && aSelection.start == aSelection.end
++        && /^[a-zA-Z0-9.$_]$/.test(aPreviousChar);
 +  },
 +
 +  /**
@@ -1069,7 +1107,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
     * @private
     */
    _doTab: function SE__doTab()
-@@ -509,6 +534,15 @@ SourceEditor.prototype = {
+@@ -509,6 +541,15 @@ SourceEditor.prototype = {
        return true;
      }
  
@@ -1085,12 +1123,13 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      return false;
    },
  
-@@ -536,6 +570,15 @@ SourceEditor.prototype = {
+@@ -536,6 +577,16 @@ SourceEditor.prototype = {
        indent = (new Array(this._tabSize + 1)).join(" ");
      }
  
 +    // Do autocompletion.
-+    let previousChar = this.getText()[this.getCaretOffset() - 1];
++    let previousChar = this.getText(this.getCaretOffset() - 1,
++        this.getCaretOffset());
 +    if (this._isAutocompletionAllowed(selection, previousChar)) {
 +      // We have the right to autocomplete now.
 +      this._autocomplete.cycle(-1);
@@ -1101,7 +1140,74 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      let lines = [];
      for (let line, i = firstLine; i <= lastLine; i++) {
        line = model.getLine(i, true);
-@@ -2029,5 +2072,8 @@ SourceEditor.prototype = {
+@@ -1798,6 +1849,66 @@ SourceEditor.prototype = {
+   },
+ 
+   /**
++   * Returns the {x, y} pixel location of the top-left corner of the character
++   * bounding box at the specified offset in the document.  The pixel location
++   * is relative to the document.
++   *
++   * @param number offset
++   *        The character offset
++   * @returns object
++   *          The {x, y} pixel location of the given offset.
++   */
++  getLocationAtOffset: function SE_getLocationAtOffset(aOffset)
++  {
++    return this._view.getLocationAtOffset(aOffset);
++  },
++
++  /**
++   * Returns the line height for a given line index.  Returns the default line
++   * height if the line index is not specified.
++   *
++   * @param number lineIndex
++   *        The line index.
++   * @returns number
++   *          The height of the line in pixels.
++   */
++  getLineHeight: function SE_getLineHeight(aLineIndex)
++  {
++    return this._view.getLineHeight(aLineIndex);
++  },
++
++  /**
++   * Converts the given rectangle from coordinates relative to the document (the
++   * origin being hte top-left corner of the first line) to coordinates
++   * relative to the html page.
++   *
++   * @param object aCoord
++   *        An object with properties x and y.
++   */
++  convertCoordFromDocumentToPage: function SE_convertCoordFromDocumentToPage(aCoord)
++  {
++    this._view.convert(aCoord, "document", "page");
++  },
++
++  /**
++   * Returns the text of the line at the given index.
++   *
++   * The valid indices are 0 to line count exclusive.  Returns null
++   * if the index is out of range.
++   *
++   * @param number aLineIndex
++   *        The zero based index of the line.
++   * @param boolean aIncludeDelimiter
++   *        Whether or not to include the line delimiter.
++   * @returns String
++   *        The line text or null if out of range.
++   */
++  getLine: function SE_getLine(aLineIndex, aIncludeDelimiter)
++  {
++    return this._model.getLine(aLineIndex, aIncludeDelimiter);
++  },
++
++  /**
+    * Setter for the read-only state of the editor.
+    * @param boolean aValue
+    *        Tells if you want the editor to read-only or not.
+@@ -2029,5 +2140,8 @@ SourceEditor.prototype = {
      this._model = null;
      this._config = null;
      this._lastFind = null;

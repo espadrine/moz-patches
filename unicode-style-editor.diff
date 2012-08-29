@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent c80d0e010be310c2770e6668a89ee5cce1e97f3d
+# Parent f77ed5fe36f0b82349db2d2b7b9700d44fda3cd9
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
 Bug 747820 — Style editor breaks with non-latin encoding.
 
@@ -135,13 +135,12 @@ diff --git a/browser/devtools/styleeditor/StyleEditor.jsm b/browser/devtools/sty
 diff --git a/browser/devtools/styleeditor/test/browser_styleeditor_init.js b/browser/devtools/styleeditor/test/browser_styleeditor_init.js
 --- a/browser/devtools/styleeditor/test/browser_styleeditor_init.js
 +++ b/browser/devtools/styleeditor/test/browser_styleeditor_init.js
-@@ -71,6 +71,11 @@ function testEditorAdded(aChrome, aEdito
+@@ -71,6 +71,10 @@ function testEditorAdded(aChrome, aEdito
  
  function testFirstStyleSheetEditor(aChrome, aEditor)
  {
 +  // Note: the html <link> contains charset="UTF-8".
-+  let text = aEditor._state.text;
-+  ok(text.indexOf("☺") >= 0,
++  ok(aEditor._state.text.indexOf("\u263a") >= 0,
 +     "stylesheet is unicode-aware.");
 +
    //testing TESTCASE's simple.css stylesheet

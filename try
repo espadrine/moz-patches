@@ -1,4 +1,5 @@
 # HG changeset patch
-# Parent 166fbd0741dc1c085720ba31c9d97159f6b26501
+# Parent f173e05484719e109ba23c5b234c7c531ae6d7ee
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
-try: -b do -p all -u mochitests -t none
+try: -b do -p all -u all -t none
+

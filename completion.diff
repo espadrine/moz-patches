@@ -1,21 +1,23 @@
 # HG changeset patch
-# Parent c80d0e010be310c2770e6668a89ee5cce1e97f3d
+# Parent 4a1b771880d830a75f83593b31493c0874166b13
 # User Thaddee Tyl <thaddee.tyl@gmail.com>
 Bug 762164 — Implement Autocompletion in the Source Editor
 
+diff --git a/browser/app/profile/firefox.js b/browser/app/profile/firefox.js
+--- a/browser/app/profile/firefox.js
++++ b/browser/app/profile/firefox.js
+@@ -1121,6 +1121,7 @@ pref("devtools.hud.loglimit.console", 20
+ // - expandtab: expand Tab characters to spaces.
+ pref("devtools.editor.tabsize", 4);
+ pref("devtools.editor.expandtab", true);
++pref("devtools.editor.autocomplete.enabled", true);
+ 
+ // Tells which component you want to use for source editing in developer tools.
+ //
 diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratchpad/scratchpad.js
 --- a/browser/devtools/scratchpad/scratchpad.js
 +++ b/browser/devtools/scratchpad/scratchpad.js
-@@ -262,7 +262,7 @@ var Scratchpad = {
-         this._previousLocation != this.gBrowser.contentWindow.location.href) {
-       let contentWindow = this.gBrowser.selectedBrowser.contentWindow;
-       this._contentSandbox = new Cu.Sandbox(contentWindow,
--        { sandboxPrototype: contentWindow, wantXrays: false, 
-+        { sandboxPrototype: contentWindow, wantXrays: false,
-           sandboxName: 'scratchpad-content'});
- 
-       this._previousBrowserWindow = this.browserWindow;
-@@ -400,6 +400,20 @@ var Scratchpad = {
+@@ -378,6 +378,20 @@ var Scratchpad = {
    },
  
    /**
@@ -36,7 +38,7 @@ diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratc
     * Execute the selected text (if any) or the entire editor content in the
     * current context.
     * @return mixed
-@@ -1041,11 +1055,13 @@ var Scratchpad = {
+@@ -1179,11 +1193,14 @@ var Scratchpad = {
  
      this.editor = new SourceEditor();
  
@@ -46,6 +48,7 @@ diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratc
        showLineNumbers: true,
        initialText: initialText,
        contextMenu: "scratchpad-text-popup",
++      autocompleteEnabled: true,
 +      getSandbox: getSandbox,
      };
  
@@ -53,10 +56,10 @@ diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratc
 diff --git a/browser/devtools/scratchpad/test/Makefile.in b/browser/devtools/scratchpad/test/Makefile.in
 --- a/browser/devtools/scratchpad/test/Makefile.in
 +++ b/browser/devtools/scratchpad/test/Makefile.in
-@@ -33,6 +33,7 @@ MOCHITEST_BROWSER_FILES = \
- 		browser_scratchpad_bug_650760_help_key.js \
- 		browser_scratchpad_bug_651942_recent_files.js \
- 		browser_scratchpad_bug756681_display_non_error_exceptions.js \
+@@ -36,6 +36,7 @@ MOCHITEST_BROWSER_FILES = \
+ 		browser_scratchpad_bug_751744_revert_to_saved.js \
+ 		browser_scratchpad_bug740948_reload_and_run.js \
+ 		browser_scratchpad_bug_661762_wrong_window_focus.js \
 +		browser_scratchpad_bug_762164_autocompletion.js \
  		head.js \
  
@@ -159,7 +162,7 @@ diff --git a/browser/devtools/sourceeditor/autocompletion.jsm b/browser/devtools
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/sourceeditor/autocompletion.jsm
-@@ -0,0 +1,867 @@
+@@ -0,0 +1,900 @@
 +/* vim:set ts=2 sw=2 sts=2 et tw=80:
 + * This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -168,8 +171,13 @@ new file mode 100644
 +"use strict";
 +
 +const Cu = Components.utils;
-+Cu.import("resource:///modules/WebConsoleUtils.jsm");
++Cu.import("resource://gre/modules/devtools/WebConsoleUtils.jsm");
 +Cu.import("resource://gre/modules/reflect.jsm");
++Cu.import("resource://gre/modules/XPCOMUtils.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "AutocompletePopup",
++                                  "resource:///modules/AutocompletePopup.jsm");
++
 +
 +var EXPORTED_SYMBOLS = ["Autocompletion"];
 +
@@ -182,7 +190,6 @@ new file mode 100644
 + * @param string aCssClass
 + *        The CSS class that you want it to have (optional).
 + *        Defaults to "autocomplete".
-+ *
 + * @return object
 + *         The DOM element representing the popover.
 + */
@@ -202,13 +209,13 @@ new file mode 100644
 +}
 +
 +const NUM_VISIBLE_COMPLETIONS = 10;
-+const DELAYED_POPUP = 200;
++const DELAYED_POPUP = 150;
 +
 +/**
 + * Autocompletion object.
 + * This constructor creates the necessary DOM popup.
 + *
-+ * @param object aEd
++ * @param object aEditor
 + *        The Source Editor instance to target.
 + * @param object aOptions
 + *        Properties for tuning certain defaults:
@@ -221,30 +228,36 @@ new file mode 100644
 + *
 + *  @see NUM_VISIBLE_COMPLETIONS
 + */
-+function Autocompletion(aEd, aOptions = {}) {
++function Autocompletion(aEditor, aOptions = {}) {
 +  this.numVisibleCompletions = aOptions.numVisibleCompletions ||
 +      NUM_VISIBLE_COMPLETIONS;
 +  this.getSandbox = aOptions.getSandbox || null;
 +  if (this.getSandbox) {
 +    Cu.evalInSandbox("", this.getSandbox());  // Initialize the sandbox.
 +  }
-+  this.editor = aEd;
-+  this.document = aEd.editorElement.contentDocument;
++  this.editor = aEditor;
++  this.document = aEditor.editorElement.contentDocument;
++
++  // Create the popover.
 +  this.popover = createPopover(this.document, aOptions.cssClass);
++  this.popover = new AutocompletePopup(this.document);
++  this.popover.openPopup();
++  // Track clicking on options.
++  this.popover.onClick = this._clickOnOption.bind(this);
++  this.popover.onSelect = this.onAutocompleteSelect.bind(this);
 +
 +  // The following will fire the autocompletion system on each character!
 +  this.editor.editorElement.addEventListener("keypress",
-+      this._keyPress.bind(this));
-+  this.editor.addEventListener("Selection", this._selection.bind(this));
++      this._onEditorKeyPress.bind(this));
++  this.editor.addEventListener("Selection", this._onEditorSelection.bind(this));
 +
 +  // Those will become event listeners.
-+  this._stopBound = this.stop.bind(this);
-+  this._keyBindingsBound = this._keyBindings.bind(this);
++  this.stop = this.stop.bind(this);
++  this._onEditorKeyDown = this._onEditorKeyDown.bind(this);
 +}
 +
 +Autocompletion.prototype = {
 +
-+  // The following set the way in which the autocompletion system works.
 +  getSandbox: null,
 +  numVisibleCompletions: NUM_VISIBLE_COMPLETIONS,
 +
@@ -256,19 +269,22 @@ new file mode 100644
 +  // When the autocompletion is triggered, it is "on",
 +  // and the index gives us the selected candidate.
 +  _on: false,
-+  _cycling: false,
 +  _index: 0,
++  // When we are going through candidates one by one, we are cycling.
++  // Then, '_start' is the offset to when we start autocompleting candidates,
++  // and '_end' marks the end offset of the inserted candidate.
++  _cycling: false,
 +  _start: 0,
 +  _end: 0,
++  // While in the process of autocompleting, we are inserting text (this
++  // variable is used to avoid race conditions.
 +  _insertingText: false,
 +  _completion: null,
 +  // Static analysis would better be cached.
 +  _staticCandidates: null,
++  // If this switch is on, we will run the static analysis next time we trigger
++  // autocompletion.
 +  _fireStaticAnalysis: true,
-+
-+  // The following two properties are functions that need to be bound to this.
-+  _stopBound: null,
-+  _keyBindingsBound: null,
 +
 +  _delayedPopup: null,
 +
@@ -277,6 +293,8 @@ new file mode 100644
 +    if (COMPLETERS[this.editor.getMode()]) {
 +      // The following line may be computationally intensive.
 +      this._completion = COMPLETERS[this.editor.getMode()].bind(this)();
++    } else {
++      this._completion = {};
 +    }
 +  },
 +
@@ -304,13 +322,28 @@ new file mode 100644
 +
 +    // The first child is a <select> element.
 +    let html = "<select>";
++    let selectElement = this.document.createElement("select");
 +    for (let i = 0; i < completions.length; i++) {
 +      // The first option gets selected by default.
 +      html += "<option " + (i == this._index ? "selected='true'" : "") + ">" +
 +        completions[i] + "</option>";
++      let optionElement = this.document.createElement("option");
++      optionElement.textContent = completions[i];
++      if (i == this._index) {
++        optionElement.setAttribute("selected", "true");
++      }
++      selectElement.appendChild(optionElement);
 +    }
 +    html += "</select>";
 +    this.popover.innerHTML = html;
++    if (this.popover.firstChild) {
++      this.popover.removeChild(this.popover.firstChild);
++    }
++    this.popover.appendChild(selectElement);
++
++    this.popover.setItems(completions.map(function(l) { return {label:l}; }));
++    this.popover.selectedIndex = this._index;
++
 +    // Track clicking on options.
 +    this.popover.firstChild.addEventListener("click",
 +        this._clickOnOption.bind(this));
@@ -321,7 +354,7 @@ new file mode 100644
 +    let coord = ed.getLocationAtOffset(ed.getCaretOffset());
 +    let caret = ed.getCaretPosition();
 +    coord.y += ed.getLineHeight(caret.line);
-+    ed.convertCoordFromDocumentToPage(coord);
++    ed.convertDocumentCoordsToView(coord);
 +    if (!this._cycling) {
 +      this.popover.style.left = coord.x + "px";
 +    }
@@ -345,51 +378,49 @@ new file mode 100644
 +    // Preparing the editor for turning it off,
 +    // and then we turn it on.
 +    this.editor.addEventListener("TextChanged",
-+                                 this._stopBound);
++                                 this.stop);
 +    this.editor.addEventListener("Selection",
-+                                 this._stopBound);
++                                 this.stop);
 +    this.editor.editorElement.addEventListener("keydown",
-+                                 this._keyBindingsBound, true);
++                                 this._onEditorKeyDown, true);
 +    this._on = true;
 +  },
 +
 +  // Specific autocompletion-only keys.
-+  _keyBindings: function AC__keyBindings(aEvent)
++  _onEditorKeyDown: function AC__onEditorKeyDown(aEvent)
 +  {
-+    let e = aEvent;
-+    if (e.keyCode == e.DOM_VK_ESCAPE) {          // ESC key.
++    if (aEvent.keyCode == aEvent.DOM_VK_ESCAPE) {      // ESC key.
 +      this.stop();
 +      if (this._cycling) {
 +        this.editor.setText("", this._start, this._end);
 +      }
-+      e.stopPropagation();
-+    } else if (e.keyCode == e.DOM_VK_UP) {   // ↑ key.
++      aEvent.stopPropagation();
++    } else if (aEvent.keyCode == aEvent.DOM_VK_UP) {   // ↑ key.
 +      if (this._on) {
 +        this.cycle(-1);
-+        e.stopPropagation();
-+        e.preventDefault();
++        aEvent.stopPropagation();
++        aEvent.preventDefault();
 +      }
-+    } else if (e.keyCode == e.DOM_VK_DOWN) {   // ↓ key.
++    } else if (aEvent.keyCode == aEvent.DOM_VK_DOWN) { // ↓ key.
 +      if (this._on) {
 +        if (!this._cycling) {
 +          this.cycle(2);
 +        } else {
 +          this.cycle();
 +        }
-+        e.stopPropagation();
-+        e.preventDefault();
++        aEvent.stopPropagation();
++        aEvent.preventDefault();
 +      }
 +    }
 +  },
 +
-+  _keyPress: function AC__keyPress(aEvent)
++  _onEditorKeyPress: function AC__onEditorKeyPress(aEvent)
 +  {
-+    let e = aEvent;
 +    if (!this._insertingText) {
-+      if (e.keyCode == e.DOM_VK_RETURN) {
++      if (aEvent.keyCode == aEvent.DOM_VK_RETURN) {
 +        this._fireStaticAnalysis = true;
 +      }
-+      if (e.charCode) {
++      if (aEvent.charCode) {
 +        this.document.defaultView.clearTimeout(this._delayedPopup);
 +        this._delayedPopup = this.document.defaultView
 +            .setTimeout(this.displayCompletion.bind(this), DELAYED_POPUP);
@@ -397,13 +428,12 @@ new file mode 100644
 +    }
 +  },
 +
-+  _selection: function AC__selection(aEvent)
++  _onEditorSelection: function AC__onEditorSelection(aEvent)
 +  {
-+    let e = aEvent;
 +    // If the distance between the old position and the new is bigger than 1,
 +    // the static analysis is worth updating.
-+    if ((e.oldValue.start - e.newValue.start) *
-+        (e.oldValue.start - e.newValue.start) > 1) {
++    if ((aEvent.oldValue.start - aEvent.newValue.start) *
++        (aEvent.oldValue.start - aEvent.newValue.start) > 1) {
 +      this._fireStaticAnalysis = true;
 +    }
 +  },
@@ -424,12 +454,13 @@ new file mode 100644
 +  hideCompletion: function AC_hideCompletion()
 +  {
 +    this.popover.style.display = "none";
++    this.popover.hidePopup();
 +    this.editor.removeEventListener("TextChanged",
-+                                    this._stopBound);
++                                    this.stop);
 +    this.editor.removeEventListener("Selection",
-+                                    this._stopBound);
++                                    this.stop);
 +    this.editor.editorElement.removeEventListener("keydown",
-+                                    this._keyBindingsBound, true);
++                                    this._onEditorKeyDown, true);
 +    this._completion = null;
 +    this._on = false;
 +    this._index = 0;
@@ -443,9 +474,8 @@ new file mode 100644
 +   */
 +  cycle: function AC_cycle(aCount = 1)
 +  {
-+    let count = aCount;
 +    if (this._cycling) {
-+      this._index += count;
++      this._index += aCount;
 +      if (this._index >= this._completion.candidates.length) {
 +        // Go back to the start.
 +        this._index = 0;
@@ -454,10 +484,10 @@ new file mode 100644
 +        this._index = this._completion.candidates.length - 1;
 +      }
 +      this.popover.firstChild.selectedIndex = this._index;
++      this.popover.selectedIndex = this._index;
 +
 +      // Insert the corresponding entry.
 +      this.insert(this._completion.completions[this._index]);
-+      this.editor.endCompoundChange();
 +
 +    } else {  // We are not yet cycling.
 +      // Making a new spot in the undo stack allows the user
@@ -465,13 +495,14 @@ new file mode 100644
 +      this.editor.startCompoundChange();
 +
 +      this.runCompleters();
-+      if (count == 0) { count = 1; }
-+      if (count > 0) {
++      if (aCount == 0) {
++        this._index = 0;
++      } else if (aCount > 0) {
 +        // We can start from the beginning.
-+        this._index = count - 1;
-+      } else if (count < 0) {
++        this._index = aCount - 1;
++      } else if (aCount < 0) {
 +        // We can also start at the end.
-+        this._index = this._completion.candidates.length + count;
++        this._index = this._completion.candidates.length + aCount;
 +      }
 +
 +      // Only do something if we have a completion to work with.
@@ -480,6 +511,9 @@ new file mode 100644
 +        if (this._completion.candidates.length > 1) {
 +          this.displayCompletion();
 +          this._cycling = true;
++        } else {
++          // If we don't cycle, we should consider the change done.
++          this.editor.endCompoundChange();
 +        }
 +
 +        // Now, show the first entry.
@@ -504,10 +538,9 @@ new file mode 100644
 +   */
 +  insert: function AC_insert(aText)
 +  {
-+    let text = aText;
 +    this._insertingText = true;
-+    this.editor.setText(text, this._start, this._end);
-+    this._end = this._start + text.length;
++    this.editor.setText(aText, this._start, this._end);
++    this._end = this._start + aText.length;
 +    this._insertingText = false;
 +  },
 +
@@ -524,6 +557,7 @@ new file mode 100644
 +    if (this._insertingText) { return false; }
 +    this.hideCompletion();
 +    this._cycling = false;
++    this.editor.endCompoundChange();
 +    return true;
 +  },
 +
@@ -578,7 +612,6 @@ new file mode 100644
 +    let allStaticCandidates = this._staticCandidates;
 +    // Right now, we can only complete variables.
 +    if (identifier.indexOf(".") == -1 && identifier.indexOf("[") == -1 &&
-+        // Thou shalt only complete what there is to complete.
 +        identifier.length != 0 && allStaticCandidates != null) {
 +      let staticCandidates = [];
 +      for (let [candidate, weight] of allStaticCandidates) {
@@ -593,11 +626,10 @@ new file mode 100644
 +        return allStaticCandidates.get(b) - allStaticCandidates.get(a);
 +      });
 +      candidates = candidates.concat(staticCandidates);
-+      completions = completions.concat(staticCandidates.map(
-+          function(candidate) {
++      completions = completions.concat(staticCandidates
++        .map(function(candidate) {
 +            return candidate.slice(identifier.length);
-+          }
-+      ));
++        }));
 +    }
 +
 +    // Sandbox-based candidates (Level 1).
@@ -605,17 +637,17 @@ new file mode 100644
 +    if (this.getSandbox) {
 +      let sandboxCompletion = JSPropertyProvider(this.getSandbox(), root);
 +      if (sandboxCompletion) {
-+        candidates = candidates.concat(sandboxCompletion.matches
-+            .filter(function(candidate) {
-+          // We are removing candidates from level 2.
-+          if (allStaticCandidates == null)  return true;
-+          return !allStaticCandidates.has(candidate);
-+        }));
-+        completions = completions.concat(
-+          sandboxCompletion.matches.map(function(candidate) {
++        sandboxCompletion.matches = sandboxCompletion.matches
++          .filter(function(candidate) {
++            // We are removing candidates from level 2.
++            if (allStaticCandidates == null)  return true;
++            return !allStaticCandidates.has(candidate);
++        });
++        candidates = candidates.concat(sandboxCompletion.matches);
++        completions = completions.concat(sandboxCompletion.matches
++          .map(function(candidate) {
 +            return candidate.slice(sandboxCompletion.matchProp.length);
-+          })
-+        );
++          }));
 +      }
 +    }
 +
@@ -630,7 +662,6 @@ new file mode 100644
 +    ];
 +    // This autocompletion is not meaningful when we type a property…
 +    if (identifier.indexOf(".") == -1 && identifier.indexOf("[") == -1 &&
-+        // Thou shalt only complete what there is to complete.
 +        identifier.length !== 0) {
 +      for (let keyword of keywords) {
 +        // The keyword must match and have something to add!
@@ -683,14 +714,9 @@ new file mode 100644
 + *         We return null if we could not parse the code.
 + */
 +function getStaticScope(aScript, aLine, aColumn, aStore = new Map(), aDepth = 0) {
-+  let script = aScript;
-+  let line = aLine;
-+  let column = aColumn;
-+  let store = aStore;
-+  let depth = aDepth;
 +  let tree;
 +  try {
-+    tree = Reflect.parse(script);
++    tree = Reflect.parse(aScript);
 +  } catch (e) { return null; }
 +
 +  let node = tree.body;
@@ -709,8 +735,10 @@ new file mode 100644
 +        }
 +        if (subnode.type == "VariableDeclarator") {
 +          // Variable names go one level too deep.
-+          store.set(subnode.id.name, stack.length - 1);
-+          if (!!subnode.init)  { subnode = subnode.init; }
++          aStore.set(subnode.id.name, stack.length - 1);
++          if (!!subnode.init) {
++            subnode = subnode.init;
++          }
 +          else break;
 +        }
 +        if (subnode.type == "ExpressionStatement") {
@@ -727,14 +755,18 @@ new file mode 100644
 +          subnode.type == "FunctionExpression" ||
 +          // Expressions, eg, (function(){…}());
 +          (subnode.callee && subnode.callee.type == "FunctionExpression")) {
-+        if (subnode.callee)  { subnode = subnode.callee; }
-+        if (subnode.id)  { store.set(subnode.id.name, stack.length); }
-+        if (caretInBlock(subnode, line, column)) {
++        if (subnode.callee) {
++          subnode = subnode.callee;
++        }
++        if (subnode.id) {
++          aStore.set(subnode.id.name, stack.length);
++        }
++        if (caretInBlock(subnode, aLine, aColumn)) {
 +          // Parameters are one level deeper than the function's name itself.
-+          argumentNames(subnode.params, store, stack.length + 1);
++          argumentNames(subnode.params, aStore, stack.length + 1);
 +        }
 +      }
-+      deeper = nestedNodes(subnode, line, column);
++      deeper = nestedNodes(subnode, aLine, aColumn);
 +      if (!!deeper) {
 +        // We need to go deeper.
 +        stack.push(node);
@@ -750,7 +782,7 @@ new file mode 100644
 +    }
 +  } while (stack.length > 0 || (node && index < node.length) || !!deeper);
 +
-+  return store;
++  return aStore;
 +}
 +
 +/**
@@ -765,41 +797,38 @@ new file mode 100644
 + *         The node's array. Can also return null if it gets unhappy.
 + */
 +function nestedNodes(aNode, aLine, aColumn) {
-+  let node = aNode;
-+  let line = aLine;
-+  let column = aColumn;
 +  let body = null;
 +  let newScope = true;  // Whether we enter a new scope.
-+  if (node.body) {
-+    if (node.body.body) {
++  if (aNode.body) {
++    if (aNode.body.body) {
 +      // Function declaration has a body in a body.
-+      body = node.body.body;
++      body = aNode.body.body;
 +    } else {
-+      body = node.body;
++      body = aNode.body;
 +    }
-+  } else if (node.consequent) {
-+    body = node.consequent.body;  // If statements.
-+  } else if (node.alternate) {
-+    body = node.alternate.body;   // If/else statements.
-+  } else if (node.block) {
-+    body = node.block.body;       // Try statements.
-+  } else if (node.handlers) {     // Try/catch.
-+    body = node.handlers.body.body;
-+  } else if (node.finalizer) {
-+    body = node.finalizer.body;   // Try/catch/finally.
-+  } else if (node.declarations) {
-+    body = node.declarations;     // Variable declarations.
++  } else if (aNode.consequent) {
++    body = aNode.consequent.body;  // If statements.
++  } else if (aNode.alternate) {
++    body = aNode.alternate.body;   // If/else statements.
++  } else if (aNode.block) {
++    body = aNode.block.body;       // Try statements.
++  } else if (aNode.handlers) {     // Try/catch.
++    body = aNode.handlers.body.body;
++  } else if (aNode.finalizer) {
++    body = aNode.finalizer.body;   // Try/catch/finally.
++  } else if (aNode.declarations) {
++    body = aNode.declarations;     // Variable declarations.
 +    newScope = false;
-+  } else if (node.arguments) {
-+    body = node.arguments;   // Function calls, eg, f(function(){…});
-+  } else if (node.properties) {
-+    body = node.properties;  // Objects, eg, ({f: function(){…}});
-+  } else if (node.elements) {
-+    body = node.elements;    // Array, eg, [function(){…}]
++  } else if (aNode.arguments) {
++    body = aNode.arguments;   // Function calls, eg, f(function(){…});
++  } else if (aNode.properties) {
++    body = aNode.properties;  // Objects, eg, ({f: function(){…}});
++  } else if (aNode.elements) {
++    body = aNode.elements;    // Array, eg, [function(){…}]
 +  }
 +  if (!body ||
 +      // No need to parse a scope in which the caret is not.
-+      (newScope && !caretInBlock(node, line, column))) {
++      (newScope && !caretInBlock(aNode, aLine, aColumn))) {
 +    return null;
 +  }
 +  return body;
@@ -816,18 +845,15 @@ new file mode 100644
 + *         Whether the caret is in the piece of code represented by the node.
 + */
 +function caretInBlock(aNode, aLine, aColumn) {
-+  let node = aNode;
-+  let line = aLine;
-+  let column = aColumn;
 +  return (
-+    // The node starts before the cursor.
-+    (node.loc.start.line < line ||
-+     (node.loc.start.line === line &&
-+      node.loc.start.column <= column)) &&
-+    // The node ends after the cursor.
-+    (line < node.loc.end.line ||
-+     (node.loc.end.line === line &&
-+      column <= node.loc.end.column)));
++    // The aNode starts before the cursor.
++    (aNode.loc.start.line < aLine ||
++     (aNode.loc.start.line === aLine &&
++      aNode.loc.start.column <= aColumn)) &&
++    // The aNode ends after the cursor.
++    (aLine < aNode.loc.end.line ||
++     (aNode.loc.end.line === aLine &&
++      aColumn <= aNode.loc.end.column)));
 +}
 +
 +/**
@@ -841,11 +867,11 @@ new file mode 100644
 + *        A measure of how deeply nested the node is. The deeper, the bigger.
 + */
 +function argumentNames(aNode, aStore, aWeight) {
-+  let node = aNode;
-+  let store = aStore;
-+  let weight = aWeight;
-+  for (let i = 0; i < node.length; i++) {
-+    store.set(node[i].name, weight);
++  let aNode = aNode;
++  let aStore = aStore;
++  let aWeight = aWeight;
++  for (let i = 0; i < aNode.length; i++) {
++    aStore.set(aNode[i].name, aWeight);
 +  }
 +}
 +
@@ -889,11 +915,9 @@ new file mode 100644
 + *         - index: The offset of the start of the element we last parsed.
 + */
 +function lineParser(aSource, aOffset = source.length) {
-+  let source = aSource;
-+  let offset = aOffset;
 +  // Find beginning of line.
-+  let bol = offset - 1;  // We may be *on* a newline, we want the previous line.
-+  for (;source[bol] !== "\n" && source[bol] !== "\u2028" && source[bol] !== "\u2029"
++  let bol = aOffset - 1;  // We may be *on* a newline, we want the previous line.
++  for (;aSource[bol] !== "\n" && aSource[bol] !== "\u2028" && aSource[bol] !== "\u2029"
 +       && bol != -1;
 +       bol--) {}
 +  bol++;    // Set it to the first char of the line.
@@ -903,46 +927,60 @@ new file mode 100644
 +
 +  let retain = false;
 +  function setState(newState) {
-+    if (!retain)  { boo = i; }
++    if (!retain) {
++      boo = i;
++    }
 +    state = newState;
 +  }
 +
 +  let i, c, state = STATES.ETHER;
-+  for (i = bol; i < offset && source[i]; i++) {
-+    c = source[i].charCodeAt(0);
++  for (i = bol; i < aOffset && aSource[i]; i++) {
++    c = aSource[i].charCodeAt(0);
 +    if (state == STATES.ETHER) {
 +      if (c == STATES.QUOTE || c == STATES.DQUOTE || c == STATES.SLASH)  {
 +        setState(c);
 +      }
 +      // Unicode identifiers, eg. |var \u0042 = 42;|.
-+      else if (c == STATES.BSLASH)  { setState(STATES.IDEN); i += 5; }
-+      else if (isIdentifierChar(c)) {
++      else if (c == STATES.BSLASH) {
++        setState(STATES.IDEN);
++        i += 5;
++      } else if (isIdentifierChar(c)) {
 +        setState(STATES.IDEN);
 +      } else if (retain && c == STATES.CBRACK) {
 +        setState(STATES.IDEN);
 +        retain = false;
 +      }
 +    } else if (state == STATES.QUOTE || state == STATES.DQUOTE) {
-+      if (c == STATES.BSLASH)  { i++; }
-+      else if (state == c)  { setState(STATES.ETHER); }
++      if (c == STATES.BSLASH) {
++        i++;
++      } else if (state == c) {
++        setState(STATES.ETHER);
++      }
 +    } else if (state == STATES.SLASH) {
-+      if (c == STATES.SLASH)  { setState(STATES.COMMENT); }
-+      else if (c == STATES.STAR) {
++      if (c == STATES.SLASH) {
++        setState(STATES.COMMENT);
++      } else if (c == STATES.STAR) {
 +        // Go fast to the end of the comment.
 +        setState(STATES.ETHER);
-+        i += source.slice(i, offset).indexOf("*/") + 2;
++        i += aSource.slice(i, aOffset).indexOf("*/") + 2;
 +        // If we currently are in a comment, say it.
 +        if (i < 2) {
 +          setState(STATES.COMMENT);
-+          i = offset;
++          i = aOffset;
 +        }
++      } else {
++        setState(STATES.REGEX);
 +      }
-+      else  { setState(STATES.REGEX); }
 +    } else if (state == STATES.COMMENT) {
-+      if (c == LF || c == 0x2028 || c == 0x2029)  { setState(STATES.ETHER); }
++      if (c == LF || c == 0x2028 || c == 0x2029) {
++        setState(STATES.ETHER);
++      }
 +    } else if (state == STATES.REGEX) {
-+      if (c == STATES.BSLASH)  { i++; }
-+      else if (c == STATES.SLASH)  { setState(STATES.ETHER); }
++      if (c == STATES.BSLASH) {
++        i++;
++      } else if (c == STATES.SLASH) {
++        setState(STATES.ETHER);
++      }
 +    } else if (state == STATES.IDEN) {
 +      if (isWhiteSpace(c)) {
 +        retain = true;
@@ -1018,12 +1056,10 @@ new file mode 100644
 + *         Identifier. Can be of the form `foo[bar].baz[`.
 + */
 +function getIdentifier(aSource, aOffset = source.length) {
-+  let source = aSource;
-+  let offset = aOffset;
 +  // Locate the identifier we read.
-+  let f = lineParser(source, offset);
++  let f = lineParser(aSource, aOffset);
 +  if (f.state == STATES.IDEN) {
-+    return source.slice(f.index, offset);
++    return aSource.slice(f.index, aOffset);
 +  } else return "";
 +}
 +
@@ -1038,46 +1074,45 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
  
  XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
                                     "@mozilla.org/widget/clipboardhelper;1",
-@@ -25,6 +26,7 @@ const ORION_IFRAME = "data:text/html;cha
+@@ -23,9 +24,13 @@ const ORION_IFRAME = "data:text/html;cha
+   " href='chrome://browser/skin/devtools/orion-container.css'></head>" +
+   "<body style='height:100%;margin:0;overflow:hidden'>" +
    "<div id='editor' style='height:100%'></div>" +
++  // FIXME: do we really need the following line?
++  "<div id='mainPopupSet'></div>" +
    "</body></html>";
  
 +
  const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
++const PREF_AUTOCOMPLETE_ENABLED = "devtools.editor.autocomplete.enabled";
  
  /**
-@@ -191,6 +193,9 @@ SourceEditor.prototype = {
+  * Maximum allowed vertical offset for the line index when you call
+@@ -191,6 +196,8 @@ SourceEditor.prototype = {
    _contextMenu: null,
    _dirty: false,
  
-+  _getSandbox: null,
 +  _autocomplete: null,
 +
    /**
     * The Source Editor user interface manager.
     * @type object
-@@ -247,6 +252,8 @@ SourceEditor.prototype = {
-                           SourceEditor.DEFAULTS[key];
-     }
- 
-+    this._getSandbox = aConfig.getSandbox;
-+
-     // TODO: Bug 725677 - Remove the deprecated placeholderText option from the
-     // Source Editor initialization.
-     if (aConfig.placeholderText) {
-@@ -363,6 +370,11 @@ SourceEditor.prototype = {
+@@ -363,6 +370,14 @@ SourceEditor.prototype = {
  
      this.setMode(config.mode);
  
-+    // The following needs the editor to have its mode set.
-+    this._autocomplete = new Autocompletion(this, {
-+      getSandbox: this._getSandbox,
-+    });
++    if (this._config.autocompleteEnabled &&
++        Services.prefs.getBoolPref(PREF_AUTOCOMPLETE_ENABLED)) {
++      // The following needs the editor to have its mode set.
++      this._autocomplete = new Autocompletion(this, {
++        getSandbox: this._config.getSandbox,
++      });
++    }
 +
      this._undoStack = new UndoStack(this._view, config.undoLimit);
  
      this._dragAndDrop = new TextDND(this._view, this._undoStack);
-@@ -459,8 +471,28 @@ SourceEditor.prototype = {
+@@ -459,8 +474,33 @@ SourceEditor.prototype = {
    },
  
    /**
@@ -1095,8 +1130,13 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +  _isAutocompletionAllowed: function SE__isAutocompletionAllowed(aSelection,
 +                                                                 aPreviousChar)
 +  {
-+    return this._autocomplete && aSelection.start == aSelection.end
-+        && /^[a-zA-Z0-9.$_]$/.test(aPreviousChar);
++    if (this._config.autocompleteEnabled &&
++        Services.prefs.getBoolPref(PREF_AUTOCOMPLETE_ENABLED)) {
++      return this._autocomplete && aSelection.start == aSelection.end
++          && /^[a-zA-Z0-9.$_]$/.test(aPreviousChar);
++    } else {
++      return false;
++    }
 +  },
 +
 +  /**
@@ -1107,13 +1147,13 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
     * @private
     */
    _doTab: function SE__doTab()
-@@ -509,6 +541,15 @@ SourceEditor.prototype = {
+@@ -509,6 +549,15 @@ SourceEditor.prototype = {
        return true;
      }
  
 +    // Do autocompletion.
 +    let previousChar = this.getText(this.getCaretOffset() - 1,
-+        this.getCaretOffset());
++                                    this.getCaretOffset());
 +    if (this._isAutocompletionAllowed(selection, previousChar)) {
 +      // We have the right to autocomplete now.
 +      this._autocomplete.cycle();
@@ -1123,13 +1163,13 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      return false;
    },
  
-@@ -536,6 +577,16 @@ SourceEditor.prototype = {
+@@ -536,6 +585,16 @@ SourceEditor.prototype = {
        indent = (new Array(this._tabSize + 1)).join(" ");
      }
  
 +    // Do autocompletion.
 +    let previousChar = this.getText(this.getCaretOffset() - 1,
-+        this.getCaretOffset());
++                                    this.getCaretOffset());
 +    if (this._isAutocompletionAllowed(selection, previousChar)) {
 +      // We have the right to autocomplete now.
 +      this._autocomplete.cycle(-1);
@@ -1140,32 +1180,17 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      let lines = [];
      for (let line, i = firstLine; i <= lastLine; i++) {
        line = model.getLine(i, true);
-@@ -1798,6 +1849,66 @@ SourceEditor.prototype = {
+@@ -1834,6 +1893,52 @@ SourceEditor.prototype = {
    },
  
    /**
-+   * Returns the {x, y} pixel location of the top-left corner of the character
-+   * bounding box at the specified offset in the document.  The pixel location
-+   * is relative to the document.
-+   *
-+   * @param number offset
-+   *        The character offset
-+   * @returns object
-+   *          The {x, y} pixel location of the given offset.
-+   */
-+  getLocationAtOffset: function SE_getLocationAtOffset(aOffset)
-+  {
-+    return this._view.getLocationAtOffset(aOffset);
-+  },
-+
-+  /**
 +   * Returns the line height for a given line index.  Returns the default line
 +   * height if the line index is not specified.
 +   *
-+   * @param number lineIndex
++   * @param number aLineIndex
 +   *        The line index.
-+   * @returns number
-+   *          The height of the line in pixels.
++   * @return number
++   *         The height of the line in pixels.
 +   */
 +  getLineHeight: function SE_getLineHeight(aLineIndex)
 +  {
@@ -1174,19 +1199,20 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +
 +  /**
 +   * Converts the given rectangle from coordinates relative to the document (the
-+   * origin being hte top-left corner of the first line) to coordinates
-+   * relative to the html page.
++   * origin being the top-left corner of the first line) to coordinates
++   * relative to the editor view.
 +   *
 +   * @param object aCoord
-+   *        An object with properties x and y.
++   *        An object with properties x and y. The object is updated to hold the
++   *        converted coordinates.
 +   */
-+  convertCoordFromDocumentToPage: function SE_convertCoordFromDocumentToPage(aCoord)
++  convertDocumentCoordsToView: function SE_convertDocumentCoordsToView(aCoord)
 +  {
 +    this._view.convert(aCoord, "document", "page");
 +  },
 +
 +  /**
-+   * Returns the text of the line at the given index.
++   * Text of the line at the given index.
 +   *
 +   * The valid indices are 0 to line count exclusive.  Returns null
 +   * if the index is out of range.
@@ -1195,8 +1221,8 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +   *        The zero based index of the line.
 +   * @param boolean aIncludeDelimiter
 +   *        Whether or not to include the line delimiter.
-+   * @returns String
-+   *        The line text or null if out of range.
++   * @return String
++   *         The line text or null if out of range.
 +   */
 +  getLine: function SE_getLine(aLineIndex, aIncludeDelimiter)
 +  {
@@ -1207,22 +1233,46 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
     * Setter for the read-only state of the editor.
     * @param boolean aValue
     *        Tells if you want the editor to read-only or not.
-@@ -2029,5 +2140,8 @@ SourceEditor.prototype = {
+@@ -2125,5 +2230,7 @@ SourceEditor.prototype = {
      this._model = null;
      this._config = null;
      this._lastFind = null;
 +
-+    this._getSandbox = null;
 +    this._autocomplete = null;
    },
  };
+diff --git a/browser/devtools/sourceeditor/source-editor.jsm b/browser/devtools/sourceeditor/source-editor.jsm
+--- a/browser/devtools/sourceeditor/source-editor.jsm
++++ b/browser/devtools/sourceeditor/source-editor.jsm
+@@ -182,6 +182,21 @@ SourceEditor.DEFAULTS = {
+    * @type string|nsIDOMElement
+    */
+   contextMenu: "sourceEditorContextMenu",
++
++  /**
++   * Autocompletion is turned off by default.
++   * @type boolean
++   */
++  autocompleteEnabled: false,
++
++  /**
++   * This function returns a Sandbox object that can be used for dynamic
++   * analysis of JS.
++   * @see Components.utils.Sandbox
++   *      <https://developer.mozilla.org/en-US/docs/Components.utils.Sandbox>
++   * @type null|function
++   */
++  getSandbox: null,
+ };
+ 
+ /**
 diff --git a/browser/devtools/sourceeditor/test/Makefile.in b/browser/devtools/sourceeditor/test/Makefile.in
 --- a/browser/devtools/sourceeditor/test/Makefile.in
 +++ b/browser/devtools/sourceeditor/test/Makefile.in
-@@ -30,6 +30,7 @@ MOCHITEST_BROWSER_FILES = \
- 		browser_bug725430_comment_uncomment.js \
- 		browser_bug731721_debugger_stepping.js \
+@@ -32,6 +32,7 @@ MOCHITEST_BROWSER_FILES = \
  		browser_bug729960_block_bracket_jump.js \
+ 		browser_bug744021_next_prev_bracket_jump.js \
+ 		browser_bug725392_mouse_coords_char_offset.js \
 +		browser_sourceeditor_autocompletion.js \
  		head.js \
  
@@ -1231,7 +1281,7 @@ diff --git a/browser/devtools/sourceeditor/test/browser_sourceeditor_autocomplet
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/sourceeditor/test/browser_sourceeditor_autocompletion.js
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,81 @@
 +/* vim: set ts=2 et sw=2 tw=80: */
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
@@ -1252,7 +1302,7 @@ new file mode 100644
 +
 +  const windowUrl = "data:text/xml,<?xml version='1.0'?>" +
 +    "<window xmlns='http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul'" +
-+    " title='test for bug 660784' width='600' height='500'><hbox flex='1'/></window>";
++    " title='test for autocompletion' width='600' height='500'><hbox flex='1'/></window>";
 +  const windowFeatures = "chrome,titlebar,toolbar,centerscreen,resizable,dialog=no";
 +
 +  testWin = Services.ww.openWindow(null, windowUrl, "_blank", windowFeatures, null);
@@ -1267,13 +1317,14 @@ new file mode 100644
 +  testDoc = testWin.document;
 +  let hbox = testDoc.querySelector("hbox");
 +  editor = new SourceEditor();
-+  editor.init(hbox, {}, editorLoaded);
++  editor.init(hbox, {
++    autocompleteEnabled: true,
++    mode: SourceEditor.MODES.JAVASCRIPT,
++  }, editorLoaded);
 +}
 +
 +function editorLoaded()
 +{
-+  // JS autocompletion.
-+  editor.setMode(SourceEditor.MODES.JAVASCRIPT);
 +  editor.focus();
 +
 +  let before = "let window = {};\nwin";
@@ -1329,10 +1380,22 @@ diff --git a/browser/devtools/sourceeditor/test/browser_sourceeditor_initializat
    // Test the Tab key.
  
    editor.setText("a\n  b\n c");
-diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
---- a/browser/devtools/webconsole/WebConsoleUtils.jsm
-+++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
-@@ -992,10 +992,10 @@ function JSPropertyProvider(aScope, aInp
+diff --git a/browser/devtools/webconsole/AutocompletePopup.jsm b/browser/devtools/webconsole/AutocompletePopup.jsm
+--- a/browser/devtools/webconsole/AutocompletePopup.jsm
++++ b/browser/devtools/webconsole/AutocompletePopup.jsm
+@@ -80,7 +80,7 @@ AutocompletePopup.prototype = {
+    * @param nsIDOMNode aAnchor
+    *        Optional node to anchor the panel to.
+    */
+-  openPopup: function AP_openPopup(aAnchor)
++  openPopup: function AP_openPopup(aAnchor = null)
+   {
+     this._panel.openPopup(aAnchor, "after_start", 0, 0, false, false);
+ 
+diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -1197,10 +1197,10 @@ function JSPropertyProvider(aScope, aInp
   * @return object
   *         Object whose keys are all accessible properties on the object.
   */

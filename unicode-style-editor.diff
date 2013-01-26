@@ -6,7 +6,7 @@ Bug 747820 — Style editor breaks with non-latin encoding.
 diff --git a/browser/devtools/styleeditor/StyleEditor.jsm b/browser/devtools/styleeditor/StyleEditor.jsm
 --- a/browser/devtools/styleeditor/StyleEditor.jsm
 +++ b/browser/devtools/styleeditor/StyleEditor.jsm
-@@ -759,6 +759,81 @@ StyleEditor.prototype = {
+@@ -759,6 +759,87 @@ StyleEditor.prototype = {
    },
  
    /**
@@ -17,6 +17,8 @@ diff --git a/browser/devtools/styleeditor/StyleEditor.jsm b/browser/devtools/sty
 +   *        Source of a CSS stylesheet, loaded from file or cache.
 +   * @param string aChannelCharset
 +   *        Charset of the source string if set by the HTTP channel.
++   * @return string
++   *         The CSS string, in unicode.
 +   */
 +  _decodeCSSCharset: function SE__decodeCSSCharset(aString, aChannelCharset)
 +  {
@@ -80,15 +82,19 @@ diff --git a/browser/devtools/styleeditor/StyleEditor.jsm b/browser/devtools/sty
 +    let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
 +        .createInstance(Ci.nsIScriptableUnicodeConverter);
 +
-+    converter.charset = aCharset;
-+    return converter.ConvertToUnicode(aString);
++    try {
++      converter.charset = aCharset;
++      return converter.ConvertToUnicode(aString);
++    } catch(e) {
++      return aString;
++    }
 +  },
 +
 +  /**
     * Load source from a file or file-like resource.
     *
     * @param string aHref
-@@ -790,6 +865,7 @@ StyleEditor.prototype = {
+@@ -790,6 +871,7 @@ StyleEditor.prototype = {
    {
      let channel = Services.io.newChannel(aHref, null, null);
      let chunks = [];
@@ -96,7 +102,7 @@ diff --git a/browser/devtools/styleeditor/StyleEditor.jsm b/browser/devtools/sty
      let streamListener = { // nsIStreamListener inherits nsIRequestObserver
        onStartRequest: function (aRequest, aContext, aStatusCode) {
          if (!Components.isSuccessCode(aStatusCode)) {
-@@ -797,6 +873,10 @@ StyleEditor.prototype = {
+@@ -797,6 +879,10 @@ StyleEditor.prototype = {
          }
        }.bind(this),
        onDataAvailable: function (aRequest, aContext, aStream, aOffset, aCount) {
@@ -107,7 +113,7 @@ diff --git a/browser/devtools/styleeditor/StyleEditor.jsm b/browser/devtools/sty
          chunks.push(NetUtil.readInputStreamToString(aStream, aCount));
        },
        onStopRequest: function (aRequest, aContext, aStatusCode) {
-@@ -804,7 +884,7 @@ StyleEditor.prototype = {
+@@ -804,7 +890,7 @@ StyleEditor.prototype = {
            return this._signalError(LOAD_ERROR);
          }
  
@@ -116,7 +122,7 @@ diff --git a/browser/devtools/styleeditor/StyleEditor.jsm b/browser/devtools/sty
        }.bind(this)
      };
  
-@@ -816,9 +896,14 @@ StyleEditor.prototype = {
+@@ -816,9 +902,14 @@ StyleEditor.prototype = {
     * Called when source has been loaded.
     *
     * @param string aSourceText

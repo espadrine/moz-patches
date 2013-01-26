@@ -1,0 +1,279 @@
+Bug 785174: Implement Debugger.Object.prototype.evalInGlobal, .evalInGlobalWithBindings, .evalInGlobalWithBindingsAndABrandySoakedMaraschinoCherry
+
+diff --git a/js/src/jit-test/tests/debug/Object-evalInGlobal-01.js b/js/src/jit-test/tests/debug/Object-evalInGlobal-01.js
+new file mode 100644
+--- /dev/null
++++ b/js/src/jit-test/tests/debug/Object-evalInGlobal-01.js
+@@ -0,0 +1,13 @@
++// Debugger.Object.prototype.evalInGlobal basics
++
++var g = newGlobal('new-compartment');
++var h = newGlobal('new-compartment');
++var dbg = new Debugger;
++var gw = dbg.addDebuggee(g);
++var hw = dbg.addDebuggee(h);
++
++g.y = "Bitte Orca";
++h.y = "Visiter";
++var y = "W H O K I L L";
++assertEq(gw.evalInGlobal('y').return, "Bitte Orca");
++assertEq(hw.evalInGlobal('y').return, "Visiter");
+diff --git a/js/src/jit-test/tests/debug/Object-evalInGlobal-02.js b/js/src/jit-test/tests/debug/Object-evalInGlobal-02.js
+new file mode 100644
+--- /dev/null
++++ b/js/src/jit-test/tests/debug/Object-evalInGlobal-02.js
+@@ -0,0 +1,20 @@
++// Debugger.Object.prototype.evalInGlobal argument validation
++
++load(libdir + 'asserts.js');
++
++var g = newGlobal('new-compartment');
++var dbg = new Debugger();
++var gw = dbg.addDebuggee(g);
++var gobj = gw.makeDebuggeeValue(g.eval("({})"));
++
++assertThrowsInstanceOf(function () { gw.evalInGlobal(); }, TypeError);
++assertThrowsInstanceOf(function () { gw.evalInGlobal(10); }, TypeError);
++assertThrowsInstanceOf(function () { gobj.evalInGlobal('42'); }, TypeError);
++assertEq(gw.evalInGlobal('42').return, 42);
++
++assertThrowsInstanceOf(function () { gw.evalInGlobalWithBindings(); }, TypeError);
++assertThrowsInstanceOf(function () { gw.evalInGlobalWithBindings('42'); }, TypeError);
++assertThrowsInstanceOf(function () { gw.evalInGlobalWithBindings(10, 1729); }, TypeError);
++assertThrowsInstanceOf(function () { gw.evalInGlobalWithBindings('42', 1729); }, TypeError);
++assertThrowsInstanceOf(function () { gobj.evalInGlobalWithBindings('42', {}); }, TypeError);
++assertEq(gw.evalInGlobalWithBindings('42', {}).return, 42);
+diff --git a/js/src/jit-test/tests/debug/Object-evalInGlobal-03.js b/js/src/jit-test/tests/debug/Object-evalInGlobal-03.js
+new file mode 100644
+--- /dev/null
++++ b/js/src/jit-test/tests/debug/Object-evalInGlobal-03.js
+@@ -0,0 +1,19 @@
++// Debugger.Object.prototype.evalInGlobal: closures capturing the global
++
++var g = newGlobal('new-compartment');
++var h = newGlobal('new-compartment');
++var dbg = new Debugger;
++var gw = dbg.addDebuggee(g);
++var hw = dbg.addDebuggee(h);
++
++g.x = "W H O K I L L";
++h.x = "No Color";
++var c1 = gw.evalInGlobal('(function () { return x; })').return;
++var c2 = hw.evalInGlobal('(function () { return x; })').return;
++var c3 = gw.evalInGlobalWithBindings('(function () { return x + y; })', { y:" In Rainbows" }).return;
++var c4 = hw.evalInGlobalWithBindings('(function () { return x + y; })', { y:" In Rainbows" }).return;
++
++assertEq(c1.call(null).return, "W H O K I L L");
++assertEq(c2.call(null).return, "No Color");
++assertEq(c3.call(null).return, "W H O K I L L In Rainbows");
++assertEq(c4.call(null).return, "No Color In Rainbows");
+diff --git a/js/src/jit-test/tests/debug/Object-evalInGlobal-04.js b/js/src/jit-test/tests/debug/Object-evalInGlobal-04.js
+new file mode 100644
+--- /dev/null
++++ b/js/src/jit-test/tests/debug/Object-evalInGlobal-04.js
+@@ -0,0 +1,55 @@
++// Debugger.Object.prototype.evalInGlobal: nested evals
++
++var g = newGlobal('new-compartment');
++var dbg = new Debugger;
++var gw = dbg.addDebuggee(g);
++
++assertEq(gw.evalInGlobal("eval('\"Awake\"');").return, "Awake");
++
++// Evaluating non-strict-mode code uses the given global as its variable
++// environment.
++g.x = "Swing Lo Magellan";
++g.y = "The Milk-Eyed Mender";
++assertEq(gw.evalInGlobal("eval('var x = \"A Brief History of Love\"');\n"
++                         + "var y = 'Merriweather Post Pavilion';"
++                         + "x;").return,
++         "A Brief History of Love");
++assertEq(g.x, "A Brief History of Love");
++assertEq(g.y, "Merriweather Post Pavilion");
++
++// As above, but notice that we still create bindings on the global, even
++// when we've interposed a new environment via 'withBindings'.
++g.x = "Swing Lo Magellan";
++g.y = "The Milk-Eyed Mender";
++assertEq(gw.evalInGlobalWithBindings("eval('var x = d1;'); var y = d2; x;",
++                                     { d1: "A Brief History of Love",
++                                       d2: "Merriweather Post Pavilion" }).return,
++         "A Brief History of Love");
++assertEq(g.x, "A Brief History of Love");
++assertEq(g.y, "Merriweather Post Pavilion");
++
++
++// Strict mode code variants of the above:
++
++// Evaluating strict-mode code uses a fresh call object as its variable environment.
++// Also, calls to eval from strict-mode code run the eval code in a fresh
++// call object.
++g.x = "Swing Lo Magellan";
++g.y = "The Milk-Eyed Mender";
++assertEq(gw.evalInGlobal("\'use strict\';\n"
++                         + "eval('var x = \"A Brief History of Love\"');\n"
++                         + "var y = \"Merriweather Post Pavilion\";"
++                         + "x;").return,
++         "Swing Lo Magellan");
++assertEq(g.x, "Swing Lo Magellan");
++assertEq(g.y, "The Milk-Eyed Mender");
++
++// Introducing a bindings object shouldn't change this behavior.
++g.x = "Swing Lo Magellan";
++g.y = "The Milk-Eyed Mender";
++assertEq(gw.evalInGlobalWithBindings("'use strict'; eval('var x = d1;'); var y = d2; x;",
++                                     { d1: "A Brief History of Love",
++                                       d2: "Merriweather Post Pavilion" }).return,
++         "Swing Lo Magellan");
++assertEq(g.x, "Swing Lo Magellan");
++assertEq(g.y, "The Milk-Eyed Mender");
+diff --git a/js/src/js.msg b/js/src/js.msg
+--- a/js/src/js.msg
++++ b/js/src/js.msg
+@@ -375,3 +375,4 @@ MSG_DEF(JSMSG_MUST_REPORT_SAME_VALUE, 32
+ MSG_DEF(JSMSG_MUST_REPORT_UNDEFINED,  322, 0, JSEXN_TYPEERR, "proxy must report undefined for a non-configurable accessor property without a getter")
+ MSG_DEF(JSMSG_CANT_SET_NW_NC,         323, 0, JSEXN_TYPEERR, "proxy can't successfully set a non-writable, non-configurable property")
+ MSG_DEF(JSMSG_CANT_SET_WO_SETTER,     324, 0, JSEXN_TYPEERR, "proxy can't succesfully set an accessor property without a setter")
++MSG_DEF(JSMSG_DEBUG_BAD_REFERENT,     325, 2, JSEXN_TYPEERR, "{0} does not refer to {1}")
+diff --git a/js/src/vm/Debugger.cpp b/js/src/vm/Debugger.cpp
+--- a/js/src/vm/Debugger.cpp
++++ b/js/src/vm/Debugger.cpp
+@@ -81,7 +81,7 @@ ReportMoreArgsNeeded(JSContext *cx, cons
+     s[0] = '0' + (required - 1);
+     s[1] = '\0';
+     JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_MORE_ARGS_NEEDED,
+-                         name, s, required == 1 ? "" : "s");
++                         name, s, required == 2 ? "" : "s");
+     return false;
+ }
+ 
+@@ -3399,10 +3399,14 @@ js::EvaluateInEnv(JSContext *cx, Handle<
+     JS_ASSERT(!IsPoisonedPtr(chars));
+     SkipRoot skip(cx, &chars);
+ 
++    RootedValue thisv(cx);
+     if (fp) {
+         /* Execute assumes an already-computed 'this" value. */
+         if (!ComputeThis(cx, fp))
+             return false;
++        thisv = fp->thisValue();
++    } else {
++        thisv = ObjectValue(*env);
+     }
+ 
+     /*
+@@ -3411,17 +3415,18 @@ js::EvaluateInEnv(JSContext *cx, Handle<
+      * static level will suffice.
+      */
+     CompileOptions options(cx);
+-    options.setPrincipals(fp->scopeChain()->compartment()->principals)
++    options.setPrincipals(env->compartment()->principals)
+            .setCompileAndGo(true)
+            .setNoScriptRval(false)
+            .setFileAndLine(filename, lineno);
+     RootedScript script(cx, frontend::CompileScript(cx, env, fp, options, chars, length,
+-                                                    /* source = */ NULL, /* staticLimit = */ 1));
++                                                    /* source = */ NULL,
++                                                    /* staticLevel = */ fp ? 1 : 0));
+     if (!script)
+         return false;
+ 
+     script->isActiveEval = true;
+-    return ExecuteKernel(cx, script, *env, fp->thisValue(), EXECUTE_DEBUG, fp, rval);
++    return ExecuteKernel(cx, script, *env, thisv, EXECUTE_DEBUG, fp, rval);
+ }
+ 
+ static JSBool
+@@ -3469,10 +3474,14 @@ DebuggerGenericEval(JSContext *cx, const
+         }
+     }
+ 
++
+     Maybe<AutoCompartment> ac;
+-    ac.construct(cx, fp->scopeChain());
+-
+-    Rooted<Env *> env(cx, GetDebugScopeForFrame(cx, fp));
++    if (fp)
++        ac.construct(cx, fp->scopeChain());
++    else
++        ac.construct(cx, scope);
++
++    Rooted<Env *> env(cx, fp ? GetDebugScopeForFrame(cx, fp) : scope);
+     if (!env)
+         return false;
+ 
+@@ -4196,6 +4205,43 @@ DebuggerObject_makeDebuggeeValue(JSConte
+     return true;
+ }
+ 
++static bool
++RequireGlobalObject(JSContext *cx, const CallArgs &args, HandleObject obj)
++{
++    if (!obj->isGlobal()) {
++        js_ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_DEBUG_BAD_REFERENT,
++                                 JSDVG_SEARCH_STACK, args.thisv(), NullPtr(),
++                                 "a global object", NULL);
++        return false;
++    }
++
++    return true;
++}
++
++static JSBool
++DebuggerObject_evalInGlobal(JSContext *cx, unsigned argc, Value *vp)
++{
++    REQUIRE_ARGC("Debugger.Object.prototype.evalInGlobal", 1);
++    THIS_DEBUGOBJECT_OWNER_REFERENT(cx, argc, vp, "evalInGlobal", args, dbg, referent);
++    if (!RequireGlobalObject(cx, args, referent))
++        return false;
++
++    return DebuggerGenericEval(cx, "Debugger.Object.prototype.evalInGlobal",
++                               &args[0], NULL, vp, dbg, referent, NULL);
++}
++
++static JSBool
++DebuggerObject_evalInGlobalWithBindings(JSContext *cx, unsigned argc, Value *vp)
++{
++    REQUIRE_ARGC("Debugger.Object.prototype.evalInGlobalWithBindings", 2);
++    THIS_DEBUGOBJECT_OWNER_REFERENT(cx, argc, vp, "evalInGlobalWithBindings", args, dbg, referent);
++    if (!RequireGlobalObject(cx, args, referent))
++        return false;
++
++    return DebuggerGenericEval(cx, "Debugger.Object.prototype.evalInGlobalWithBindings",
++                               &args[0], &args[1], vp, dbg, referent, NULL);
++}
++
+ static JSPropertySpec DebuggerObject_properties[] = {
+     JS_PSG("proto", DebuggerObject_getProto, 0),
+     JS_PSG("class", DebuggerObject_getClass, 0),
+@@ -4223,6 +4269,8 @@ static JSFunctionSpec DebuggerObject_met
+     JS_FN("apply", DebuggerObject_apply, 0, 0),
+     JS_FN("call", DebuggerObject_call, 0, 0),
+     JS_FN("makeDebuggeeValue", DebuggerObject_makeDebuggeeValue, 1, 0),
++    JS_FN("evalInGlobal", DebuggerObject_evalInGlobal, 1, 0),
++    JS_FN("evalInGlobalWithBindings", DebuggerObject_evalInGlobalWithBindings, 2, 0),
+     JS_FS_END
+ };
+ 
+diff --git a/js/src/vm/Stack.cpp b/js/src/vm/Stack.cpp
+--- a/js/src/vm/Stack.cpp
++++ b/js/src/vm/Stack.cpp
+@@ -321,7 +321,17 @@ StackFrame::epilogue(JSContext *cx)
+             else
+                 JS_ASSERT(scopeChain() == prev()->scopeChain());
+         } else {
+-            JS_ASSERT(scopeChain()->isGlobal());
++            /*
++             * Debugger.Object.prototype.evalInGlobal creates indirect eval
++             * frames scoped to the given global;
++             * Debugger.Object.prototype.evalInGlobalWithBindings creates
++             * indirect eval frames scoped to an object carrying the introduced
++             * bindings.
++             */
++            if (isDebuggerFrame())
++                JS_ASSERT(scopeChain()->isGlobal() || scopeChain()->enclosingScope()->isGlobal());
++            else
++                JS_ASSERT(scopeChain()->isGlobal());
+         }
+         return;
+     }

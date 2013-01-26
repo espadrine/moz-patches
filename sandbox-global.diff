@@ -1,0 +1,373 @@
+# HG changeset patch
+# Parent 7a714dc9171e15d2dbfbfa99dae141882bac4c56
+# User Thaddee Tyl <thaddee.tyl@gmail.com>
+Bug 774753 — Using the debugger in the WebConsole
+
+diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
+--- a/browser/devtools/webconsole/HUDService-content.js
++++ b/browser/devtools/webconsole/HUDService-content.js
+@@ -19,6 +19,7 @@ Cu.import("resource://gre/modules/Consol
+ Cu.import("resource:///modules/WebConsoleUtils.jsm", tempScope);
+ Cu.import("resource:///modules/NetworkHelper.jsm", tempScope);
+ Cu.import("resource://gre/modules/NetUtil.jsm", tempScope);
++Cu.import("resource://gre/modules/jsdebugger.jsm", tempScope);
+ 
+ let XPCOMUtils = tempScope.XPCOMUtils;
+ let Services = tempScope.Services;
+@@ -28,6 +29,7 @@ let l10n = WebConsoleUtils.l10n;
+ let JSPropertyProvider = tempScope.JSPropertyProvider;
+ let NetworkHelper = tempScope.NetworkHelper;
+ let NetUtil = tempScope.NetUtil;
++tempScope.addDebuggerToGlobal(Cu.getGlobalForObject({}));
+ tempScope = null;
+ 
+ let activityDistributor = Cc["@mozilla.org/network/http-activity-distributor;1"].getService(Ci.nsIHttpActivityDistributor);
+@@ -518,17 +520,16 @@ let Manager = {
+ function JSTermHelper(aJSTerm)
+ {
+   /**
+-   * Find a node by ID.
++   * Find a node matching a CSS selector.
+    *
+-   * @param string aId
+-   *        The ID of the element you want.
++   * @param string aSelector
++   *        The selector of the element you want.
+    * @return nsIDOMNode or null
+    *         The result of calling document.querySelector(aSelector).
+    */
+-  aJSTerm.sandbox.$ = function JSTH_$(aSelector)
+-  {
++  aJSTerm.consoleAPI.$ = aJSTerm.makeCmd(function JSTH_$(aSelector) {
+     return aJSTerm.window.document.querySelector(aSelector);
+-  };
++  });
+ 
+   /**
+    * Find the nodes matching a CSS selector.
+@@ -538,10 +539,9 @@ function JSTermHelper(aJSTerm)
+    * @return nsIDOMNodeList
+    *         Returns the result of document.querySelectorAll(aSelector).
+    */
+-  aJSTerm.sandbox.$$ = function JSTH_$$(aSelector)
+-  {
++  aJSTerm.consoleAPI.$$ = aJSTerm.makeCmd(function JSTH_$$(aSelector) {
+     return aJSTerm.window.document.querySelectorAll(aSelector);
+-  };
++  });
+ 
+   /**
+    * Runs an xPath query and returns all matched nodes.
+@@ -552,8 +552,7 @@ function JSTermHelper(aJSTerm)
+    *        Context to run the xPath query on. Uses window.document if not set.
+    * @returns array of nsIDOMNode
+    */
+-  aJSTerm.sandbox.$x = function JSTH_$x(aXPath, aContext)
+-  {
++  aJSTerm.consoleAPI.$x = aJSTerm.makeCmd(function JSTH_$x(aXPath, aContext) {
+     let nodes = [];
+     let doc = aJSTerm.window.document;
+     let aContext = aContext || doc;
+@@ -571,7 +570,7 @@ function JSTermHelper(aJSTerm)
+     }
+ 
+     return nodes;
+-  };
++  });
+ 
+   /**
+    * Returns the currently selected object in the highlighter.
+@@ -583,10 +582,10 @@ function JSTermHelper(aJSTerm)
+    * @return nsIDOMElement|null
+    *         The DOM element currently selected in the highlighter.
+    */
+-  Object.defineProperty(aJSTerm.sandbox, "$0", {
++  Object.defineProperty(aJSTerm.consoleAPI, "$0", {
+     get: function() {
+       try {
+-        return Manager._xulWindow().InspectorUI.selection;
++        return aJSTerm.makeCmd(Manager._xulWindow().InspectorUI.selection);
+       }
+       catch (ex) {
+         aJSTerm.console.error(ex.message);
+@@ -599,11 +598,10 @@ function JSTermHelper(aJSTerm)
+   /**
+    * Clears the output of the JSTerm.
+    */
+-  aJSTerm.sandbox.clear = function JSTH_clear()
+-  {
++  aJSTerm.consoleAPI.clear = aJSTerm.makeCmd(function JSTH_clear() {
+     aJSTerm.helperEvaluated = true;
+     Manager.sendMessage("JSTerm:ClearOutput", {});
+-  };
++  });
+ 
+   /**
+    * Returns the result of Object.keys(aObject).
+@@ -612,10 +610,9 @@ function JSTermHelper(aJSTerm)
+    *        Object to return the property names from.
+    * @returns array of string
+    */
+-  aJSTerm.sandbox.keys = function JSTH_keys(aObject)
+-  {
++  aJSTerm.consoleAPI.keys = aJSTerm.makeCmd(function JSTH_keys(aObject) {
+     return Object.keys(WebConsoleUtils.unwrap(aObject));
+-  };
++  });
+ 
+   /**
+    * Returns the values of all properties on aObject.
+@@ -624,8 +621,7 @@ function JSTermHelper(aJSTerm)
+    *        Object to display the values from.
+    * @returns array of string
+    */
+-  aJSTerm.sandbox.values = function JSTH_values(aObject)
+-  {
++  aJSTerm.consoleAPI.values = aJSTerm.makeCmd(function JSTH_values(aObject) {
+     let arrValues = [];
+     let obj = WebConsoleUtils.unwrap(aObject);
+ 
+@@ -638,18 +634,17 @@ function JSTermHelper(aJSTerm)
+       aJSTerm.console.error(ex.message);
+     }
+     return arrValues;
+-  };
++  });
+ 
+   /**
+    * Opens a help window in MDN.
+    */
+-  aJSTerm.sandbox.help = function JSTH_help()
+-  {
++  aJSTerm.consoleAPI.help = aJSTerm.makeCmd(function JSTH_help() {
+     aJSTerm.helperEvaluated = true;
+     aJSTerm.window.open(
+         "https://developer.mozilla.org/AppLinks/WebConsoleHelp?locale=" +
+         aJSTerm.window.navigator.language, "help", "");
+-  };
++  });
+ 
+   /**
+    * Inspects the passed aObject. This is done by opening the PropertyPanel.
+@@ -657,8 +652,7 @@ function JSTermHelper(aJSTerm)
+    * @param object aObject
+    *        Object to inspect.
+    */
+-  aJSTerm.sandbox.inspect = function JSTH_inspect(aObject)
+-  {
++  aJSTerm.consoleAPI.inspect = aJSTerm.makeCmd(function JSTH_inspect(aObject) {
+     if (!WebConsoleUtils.isObjectInspectable(aObject)) {
+       return aObject;
+     }
+@@ -675,7 +669,7 @@ function JSTermHelper(aJSTerm)
+                                      message.objectCacheId);
+ 
+     Manager.sendMessage("JSTerm:InspectObject", message);
+-  };
++  });
+ 
+   /**
+    * Prints aObject to the output.
+@@ -684,8 +678,7 @@ function JSTermHelper(aJSTerm)
+    *        Object to print to the output.
+    * @return string
+    */
+-  aJSTerm.sandbox.pprint = function JSTH_pprint(aObject)
+-  {
++  aJSTerm.consoleAPI.pprint = aJSTerm.makeCmd(function JSTH_pprint(aObject) {
+     aJSTerm.helperEvaluated = true;
+     if (aObject === null || aObject === undefined || aObject === true ||
+         aObject === false) {
+@@ -706,7 +699,7 @@ function JSTermHelper(aJSTerm)
+     });
+ 
+     return "  " + output.join("\n  ");
+-  };
++  });
+ 
+   /**
+    * Print a string to the output, as-is.
+@@ -715,12 +708,11 @@ function JSTermHelper(aJSTerm)
+    *        A string you want to output.
+    * @returns void
+    */
+-  aJSTerm.sandbox.print = function JSTH_print(aString)
+-  {
++  aJSTerm.console.print = aJSTerm.makeCmd(function JSTH_print(aString) {
+     aJSTerm.helperEvaluated = true;
+     aJSTerm.helperRawOutput = true;
+     return String(aString);
+-  };
++  });
+ }
+ 
+ /**
+@@ -732,11 +724,13 @@ let JSTerm = {
+   get console() this.window.console,
+ 
+   /**
+-   * The Cu.Sandbox() object where code is evaluated.
++   * The Debuggee() object where code is evaluated.
+    */
+-  sandbox: null,
++  debuggee: null,
+ 
+-  _sandboxLocation: null,
++  _debugger: null,
++  consoleAPI: {},
++  _evalLocation: null,
+   _messageHandlers: {},
+ 
+   /**
+@@ -779,11 +773,14 @@ let JSTerm = {
+         Manager.sendMessage("JSTerm:NonNativeConsoleAPI", {});
+       }
+     }
++
++    // Create the debugger object.
++    this._debugger = new Debugger();
+   },
+ 
+   /**
+    * Handler for the "JSTerm:EvalRequest" remote message. This method evaluates
+-   * user input in the JavaScript sandbox and sends the result back to the
++   * user input in the JavaScript debuggee and sends the result back to the
+    * remote process. The "JSTerm:EvalResult" message includes the following
+    * data:
+    *   - id - the same ID as the EvalRequest (for tracking purposes).
+@@ -826,7 +823,7 @@ let JSTerm = {
+     this._evalInput = input;
+     try {
+       timestamp = Date.now();
+-      result = this.evalInSandbox(input);
++      result = this.evalInDebugger(input);
+     }
+     catch (ex) {
+       error = ex;
+@@ -967,6 +964,7 @@ let JSTerm = {
+    */
+   handleAutocomplete: function JST_handleAutocomplete(aRequest)
+   {
++    // TODO change JSPropertyProvider to use the debuggee evaluation.
+     let result = JSPropertyProvider(this.window, aRequest.input) || {};
+     let message = {
+       id: aRequest.id,
+@@ -978,36 +976,60 @@ let JSTerm = {
+   },
+ 
+   /**
+-   * Create the JavaScript sandbox where user input is evaluated.
++   * Create the JavaScript debuggee where user input is evaluated.
+    * @private
+    */
+-  _createSandbox: function JST__createSandbox()
++  _createDebuggee: function JST__createSandbox()
+   {
+-    this._sandboxLocation = this.window.location;
+-    this.sandbox = new Cu.Sandbox(this.window, {
+-      sandboxPrototype: this.window,
+-      wantXrays: false,
+-    });
++    this._evalLocation = this.window.location;
++    let debuggees = this._debugger.getDebuggees();
++    if (debuggees.length > 0) {
++      for (let i = 0; i < debuggees.length; i++) {
++        this._debugger.removeDebuggee(debuggees[i]);
++      }
++    }
++    this._debugger.addDebuggee(this.window);
++    this.debuggee = this._debugger.getDebuggees()[0];
+ 
+-    this.sandbox.console = this.console;
++    this.consoleAPI.console = this.makeCmd(this.console);
+ 
+     JSTermHelper(this);
++
++    // We prefer to execute the page-provided implementations for the $() and
++    // $$() functions.
++    if (this.window.$ != null) {
++      this.consoleAPI.$ = undefined;
++    }
++    if (this.window.$$ == null) {
++      this.consoleAPI.$$ = undefined;
++    }
+   },
+ 
+   /**
+-   * Evaluates a string in the sandbox.
++   * Convert an object to a command that can be added to consoleAPI.
++   *
++   * @param mixed
++   *        The object to convert to a command.
++   */
++  makeCmd: function JST_makeCmd(aBinding)
++  {
++    return this.debuggee.makeDebuggeeValue(aBinding);
++  },
++
++  /**
++   * Evaluates a string in the debuggee.
+    *
+    * @param string aString
+    *        String to evaluate in the sandbox.
+    * @return mixed
+    *         The result of the evaluation.
+    */
+-  evalInSandbox: function JST_evalInSandbox(aString)
++  evalInDebugger: function JST_evalInDebugger(aString)
+   {
+     // If the user changed to a different location, we need to update the
+     // sandbox.
+-    if (this._sandboxLocation !== this.window.location) {
+-      this._createSandbox();
++    if (this._evalLocation !== this.window.location) {
++      this._createDebuggee();
+     }
+ 
+     // The help function needs to be easy to guess, so we make the () optional
+@@ -1015,31 +1037,7 @@ let JSTerm = {
+       aString = "help()";
+     }
+ 
+-    let window = WebConsoleUtils.unwrap(this.sandbox.window);
+-    let $ = null, $$ = null;
+-
+-    // We prefer to execute the page-provided implementations for the $() and
+-    // $$() functions.
+-    if (typeof window.$ == "function") {
+-      $ = this.sandbox.$;
+-      delete this.sandbox.$;
+-    }
+-    if (typeof window.$$ == "function") {
+-      $$ = this.sandbox.$$;
+-      delete this.sandbox.$$;
+-    }
+-
+-    let result = Cu.evalInSandbox(aString, this.sandbox, "1.8",
+-                                  "Web Console", 1);
+-
+-    if ($) {
+-      this.sandbox.$ = $;
+-    }
+-    if ($$) {
+-      this.sandbox.$$ = $$;
+-    }
+-
+-    return result;
++    return this.debuggee.evalInGlobalWithBindings(aString, this.consoleAPI).return;
+   },
+ 
+   /**
+@@ -1051,8 +1049,10 @@ let JSTerm = {
+       Manager.removeMessageHandler(name);
+     }
+ 
+-    delete this.sandbox;
+-    delete this._sandboxLocation;
++    delete this.debuggee;
++    delete this._debugger;
++    delete this.consoleAPI;
++    delete this._evalLocation;
+     delete this._messageHandlers;
+     delete this._objectCache;
+   },
